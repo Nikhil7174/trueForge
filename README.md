@@ -1,33 +1,142 @@
-# TrueForge hackathon template
+# aws-hygiene: an AWS hygiene agent on TrueForge
 
-Generic TrueForge integration: **one adapter, many agent plugins**.
+One agent that does two jobs a platform team rarely has time for, on a **live AWS account**:
 
-| Plugin | Job | Gate |
+- **Cost janitor**: finds resources that cost money for nothing (unattached EBS volumes, idle Elastic IPs, orphaned snapshots, stopped instances). It proves each one with evidence, prices it live from the AWS Price List API, backs it up, and deletes it only after a human approves that specific resource.
+- **Access reviewer**: reviews IAM roles for least privilege, using the roles' actual policies, IAM service-last-accessed data and CloudTrail. It builds and lints a least-privilege policy in the sandbox and changes nothing without approval. It also respects a "no".
+
+TrueForge runs the agent loop. This repo supplies the MCP tools, the skills, the policy and the approval boundary.
+
+| Plugin | Job | Gate (literal tool names) |
 |---|---|---|
-| **access-reviewer** | Official starter #05: reach IAM, find unused access | `revoke_access` |
-| **migration-rehearsal** | Restore prod into a sandbox, run a Postgres migration there, diff every row, report a SAFE / REVIEW / BLOCK verdict. Setup and demo: [docs/migration-rehearsal.md](docs/migration-rehearsal.md) | `apply_migration` |
+| **aws-hygiene** (umbrella) | One agent merging the members below (`UMBRELLA_MEMBERS`) | union of the members' gates |
+| **cost-janitor** | AWS waste: discover → evidence → price → back up → delete | `delete_volume`, `release_elastic_ip`, `delete_snapshot`, `terminate_instance` |
+| **access-reviewer** | IAM least privilege (`IAM_BACKEND=aws`, or `fixture` for tests) | `revoke_access`, `detach_role_policy`, `put_role_policy` |
+| **migration-rehearsal** | Postgres migration rehearsal ([docs](docs/migration-rehearsal.md)); optional umbrella member | `apply_migration` |
 
-TrueForge runs the agent loop. We only supply the job, MCP tools, **skills catalog**, and approval policy.
+## Run it from a clean clone
+
+**Prerequisites:**
+- Python 3.12+
+- Node.js 22.14+
+- An AWS account (credentials in the standard boto3 chain, e.g. `~/.aws/credentials`)
+- A Daytona API key with sandbox and snapshot permissions
+- An OpenAI (or other) model key
+
+```bash
+git clone https://github.com/Nikhil7174/trueForge.git && cd trueForge
+python3.12 -m venv .venv && .venv/bin/pip install -e '.[aws]'
+cp .env.example .env        # set TRUEFORGE_MODEL, SKILL_GIT_URL, SKILL_GIT_REF (no secrets needed for AWS if ~/.aws is set)
+
+make doctor                 # read-only / dry-run AWS permission probe
+make seed                   # creates the us-west-2 environment (see "Real vs staged"); run early, IAM telemetry lags ~4 h
+```
+
+1. **Start TrueForge.** Allow it to reach the local MCP servers. The allow-list is exact-host, so everything else stays protected.
+   ```bash
+   OUTBOUND_URL_ALLOWED_HOSTS='["127.0.0.1","localhost"]' npx @truefoundry/trueforge   # UI: http://localhost:8790
+   ```
+2. **Configure it** at `http://localhost:8790`:
+   - **Settings → Models**: add your provider. `TRUEFORGE_MODEL` must be `<provider>/<model name>`.
+   - **Settings → Sandbox providers**: add Daytona. Set auto-delete low (for example 60 min), because Daytona's free tier caps total sandbox disk at 30 GiB.
+3. **Run the two MCP servers**, one per terminal, and register the agent:
+   ```bash
+   make mcp-cost   # cost-janitor-aws MCP on :8766
+   make mcp-iam    # access-reviewer-iam MCP on :8765 (IAM_BACKEND=aws)
+   make agent      # registers skills (git-backed from SKILL_GIT_URL@SKILL_GIT_REF), connectors, and the aws-hygiene agent
+   ```
+4. **Open Agents → aws-hygiene** and try:
+   - `Clean up unattached EBS volumes and idle IPs in us-west-2.`
+   - `Review least privilege for our CI and analytics roles.`
+5. **Remove everything the seed created** (plus the backups the agent took) with `make teardown`.
+
+**AWS permissions:**
+- Agent, read:
+  - `ec2:Describe*`
+  - `cloudtrail:LookupEvents`
+  - `pricing:GetProducts`
+  - `iam:List*`, `iam:Get*`, `iam:GenerateServiceLastAccessedDetails`
+- Agent, write:
+  - `ec2:CreateSnapshot`, `ec2:CreateTags`, `ec2:DeleteVolume`, `ec2:ReleaseAddress`, `ec2:DeleteSnapshot`, `ec2:TerminateInstances`
+  - `iam:DetachRolePolicy`, `iam:PutRolePolicy`
+- The seed additionally creates volumes, an Elastic IP, a stopped `t3.micro` and two IAM roles, and assumes those roles once.
+
+## How it stops
+
+- **Approval by literal tool name.** Every destructive tool is listed in `require_approval_for_tools`, not left to `@destructive`. Destructive tools take self-describing arguments, so the native approval prompt shows the blast radius: name, size, monthly cost, backup ID, rollback and reason. The agent also renders a `PreApproval` card first.
+- **Policy lives in the MCP, not the prompt.**
+  - Resources the server refuses to touch: `env=prod`/`production`, `keep=true`, `do-not-delete`, deny-listed name prefixes, deny-listed principals and AWS service-linked roles.
+  - Live state is re-read before every mutation. A call is refused on drift, or when its arguments don't match the real resource.
+  - `delete_volume` needs a completed backup snapshot of that same volume.
+  - `put_role_policy` is linted server-side: no wildcards, no IAM actions on `*`, no new privilege escalation, no access the role doesn't already have, and conditions are preserved.
+  - Every mutation is idempotent, returning `already_absent` if the resource is already gone.
+- **The sandbox never holds AWS credentials.** It gets data inline from tool results and runs stdlib-only Python: cost math, policy synthesis, diff and lint.
+
+## TrueForge features used
+
+| Feature | Where |
+|---|---|
+| Remote MCP connectors (streamable HTTP) | `cost-janitor-aws`, `access-reviewer-iam` (FastMCP servers in this repo) |
+| Tool approval (literal names), Allow/Deny with reason | every destructive tool; the denial reason is acknowledged and nothing else changes |
+| Sandbox (Daytona) + code execution | cost arithmetic, least-privilege policy synthesis, diff, lint |
+| Skills (git-backed, progressive disclosure) | `cost-janitor`, `aws-hygiene-ui`, `access-review-playbook` (+ `scripts/lint_policy.py`), `blast-radius` |
+| Generative UI (OpenUI, stock components) | fixed card contract: FindingsTable, CostTable, PlanCard, PolicyDiff, BlastRadius, PreApproval, Outcome (`skills/aws-hygiene-ui`) |
+| `ask_user_question` | evidence-first questions, one recommended option with a reason; free text triggers a rewritten re-ask |
+| Dynamic subagents | one evidence-gathering subagent per IAM role, run in parallel |
+| SDK / settings API | `tf-seed` registers skills, connectors and the agent reproducibly |
+
+## Real vs staged
+
+- **Real:**
+  - Every AWS call goes to a live account (us-west-2): EC2/EBS, IAM, CloudTrail, the Price List API.
+  - Deletions and approvals are real.
+  - Prices are fetched live; none are hardcoded.
+  - The sandbox is a real Daytona sandbox.
+- **Staged:** the AWS resources themselves. `infra/seed.py` creates the "platform team" environment: waste volumes, an idle IP, a `env=prod` volume that must be refused, and two over-privileged roles it assumes once so the telemetry is genuine. The resource IDs are tracked in a gitignored state file, not in tags.
+- **Fixture:** `IAM_BACKEND=fixture` keeps the original in-memory IAM data, for tests only. The demo uses `aws`.
+- **Built but off:** a GitHub issues audit trail (`src/trueforge_hackathon/integrations/github_audit.py`). It's enabled by setting `GITHUB_PAT` and `AUDIT_REPO`, and was skipped at the owner's request.
+
+**Known limits:**
+- IAM service-last-accessed lags up to about 4 hours and CloudTrail by minutes. Because the staged roles are new, the agent often concludes "insufficient evidence, no revocation", which is intended.
+- The staged resources are only minutes old, and the agent says so.
+- The sandbox depends on Daytona (free-tier disk cap).
+- Stock OpenUI only, with no custom components.
+- CloudTrail event names are mapped to IAM action names heuristically.
+- Snapshot cost is an upper bound, because snapshots bill for changed blocks.
+- One account and one region per run.
+
+---
+
+## Generic TrueForge template (original)
+
+Generic TrueForge integration: **one adapter, many agent plugins**. Everything below documents the original template these plugins follow.
 
 The integration is **Python**. The TrueForge server and UI stay Node (`npx @truefoundry/trueforge`).
 
-For what the hackathon required, what we built, and what is still stubbed, see [WHAT_WE_BUILT.md](WHAT_WE_BUILT.md).
+For what the hackathon required, what we built first, and what is still stubbed, see [WHAT_WE_BUILT.md](WHAT_WE_BUILT.md).
 
 ```text
+infra/                                       # seed / teardown / doctor for the live AWS environment
 skills/                                      # TrueForge skill catalog (git-backed SKILL.md)
-  access-review-playbook/                    # unused IAM + Code Mode + stop
+  cost-janitor/                              # AWS waste: evidence, live price, backup, gated delete
+  aws-hygiene-ui/                            # shared card + question contract (OpenUI)
+  access-review-playbook/                    # IAM least privilege (+ scripts/lint_policy.py)
   blast-radius/                              # shared: explain irreversible actions
   migration-rehearsal/                       # restore → migrate → row diff → verdict (+ sandbox scripts)
   _template/                                 # copy-me pack
 src/trueforge_hackathon/
   types.py / registry.py / skill_catalog.py  # AgentPlugin + catalog
   adapter/                                   # client, session/turn, approval pause
+  integrations/github_audit.py               # optional GitHub issues audit trail
   agents/_template/                          # copy-me agent (no skill folder here)
-  agents/access_reviewer/                    # spec + MCP only; attaches skills by name
+  agents/umbrella/                           # composite agent merging member plugins
+  agents/cost_janitor/                       # cost-janitor-aws MCP (tf-cost-mcp) + plugin
+  agents/access_reviewer/                    # IAM MCP (tf-mcp): backends/fixture.py | backends/aws.py
   agents/migration_rehearsal/                # spec + db-gate MCP (tf-gate) + demo DB seed/migrations
   cli/seed.py
   cli/run.py
 tests/migration_rehearsal_e2e.py             # 23 guard checks against db-gate, no TrueForge needed
+docs/spikes.md                               # verified TrueForge behaviours (sandbox, OpenUI, questions)
 docs/migration-rehearsal.md                  # migration-rehearsal setup + demo script
 ```
 
@@ -136,4 +245,4 @@ tf-run --agent access-reviewer --approve allow --session <session-id> --message 
 
 Do not put keys in git. Disclose AI assistants in this README when you submit.
 
-**AI assistants used while building:** Cursor; Claude (Anthropic) for the migration-rehearsal plugin.
+**AI assistants used while building:** Cursor; Claude (Anthropic) for the migration-rehearsal plugin; Claude Code (Anthropic) for the aws-hygiene work (infra, cost-janitor, IAM AWS backend, umbrella, skills).
