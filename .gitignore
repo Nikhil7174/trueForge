@@ -20,3 +20,9 @@ infra/.seed-state.json
 .ticket-gate/
 # Submission write-up (kept local, not published)
 docs/WRITEUP.md
+# Internal notes (kept local, never published)
+docs/PLAN.md
+docs/research.md
+docs/spikes.md
+docs/openui-reference.md
+WHAT_WE_BUILT.md
