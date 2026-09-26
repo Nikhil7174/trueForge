@@ -18,3 +18,5 @@ infra/.seed-state.json
 # ticket-resolver demo SQLite (rebuilt from the synthetic generator)
 .data/
 .ticket-gate/
+# Submission write-up (kept local, not published)
+docs/WRITEUP.md

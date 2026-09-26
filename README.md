@@ -131,8 +131,6 @@ Generic TrueForge integration: **one adapter, many agent plugins**. Everything b
 
 The integration is **Python**. The TrueForge server and UI stay Node (`npx @truefoundry/trueforge`).
 
-For the original design record, see [WHAT_WE_BUILT.md](WHAT_WE_BUILT.md).
-
 ```text
 infra/                                       # seed / teardown / doctor for the live AWS environment
 skills/                                      # TrueForge skill catalog (git-backed SKILL.md)
@@ -157,7 +155,6 @@ src/trueforge_hackathon/
   cli/run.py
 tests/migration_rehearsal_e2e.py             # 28 guard checks against db-gate, no TrueForge needed
 tests/release_captain_e2e.py                 # 27 guard checks against ship-gate, no GitHub needed
-docs/spikes.md                               # verified TrueForge behaviours (sandbox, OpenUI, questions)
 docs/migration-rehearsal.md                  # migration-rehearsal setup + demo script
 docs/release-captain.md                      # release-captain setup + demo script
 ```
@@ -263,14 +260,6 @@ tf-run --agent access-reviewer --approve allow --session <session-id> --message 
 4. **Ask:** one scope question, with a Recommended option and its reason. The ticket shows `Awaiting approval`.
 5. **Stop:** a PreApproval card, then the native approval for each deletion. Allow or Deny.
 6. **Close the loop:** the Outcome card shows verified savings, the result is posted to the ticket, and the full trace is in Sessions.
-
-## Judging map
-
-| Requirement | platform-guardian |
-|---|---|
-| Reach something real | MCP to live AWS (EC2/EBS, IAM, CloudTrail, Price List), Postgres, GitHub and Linear |
-| Run what it writes | Daytona sandbox: cost math, IAM policy synthesis and lint, migration rehearsal, build verification, bug repros |
-| Know when to stop | Every destructive tool is gated by its exact name, with policy enforced in the MCP servers and a PreApproval card before each gate |
 
 `release-captain` goes one step further: `publish_release` refuses while a migration in the release
 is unapplied, so passing tests are not enough to ship. That rule lives in the gate, not the prompt.
