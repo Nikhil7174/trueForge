@@ -129,6 +129,10 @@ def _existing_volume(ec2, state_id: str | None, name: str) -> str | None:
 
 def seed_volumes(ec2, state: dict, az: str) -> None:
     vols = state.setdefault("volumes", {})
+    # Every volume ID ever created, so teardown also finds backups of volumes
+    # that were cleaned up and re-created between runs.
+    history = state.setdefault("volume_history", [])
+    history.extend(v for v in vols.values() if v not in history)
     for spec in VOLUMES:
         name = spec["name"]
         found = _existing_volume(ec2, vols.get(name), name)
@@ -144,6 +148,7 @@ def seed_volumes(ec2, state: dict, az: str) -> None:
             TagSpecifications=[{"ResourceType": "volume", "Tags": tag_list(tags)}],
         )
         vols[name] = vol["VolumeId"]
+        history.append(vol["VolumeId"])
         save_state(state)
         _log(f"volume {name}: created {vol['VolumeId']} ({spec['size']} GiB {spec['type']}, {az})")
     ec2.get_waiter("volume_available").wait(VolumeIds=list(vols.values()))

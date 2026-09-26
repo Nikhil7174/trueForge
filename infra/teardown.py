@@ -68,7 +68,7 @@ def main() -> int:
         print(f"  volume    {name} {vid}")
     for name, sid in snapshots.items():
         print(f"  snapshot  {name} {sid}")
-    print("  snapshots of the volumes above (any)")
+    print("  snapshots of any volume these scripts ever created")
     if instance:
         print(f"  instance  {instance['name']} {instance['instance_id']}")
     if eip:
@@ -92,9 +92,10 @@ def main() -> int:
         _step(f"instance {iid}", _terminate)
 
     snap_ids = set(snapshots.values())
-    if volumes:
+    all_volume_ids = sorted(set(volumes.values()) | set(state.get("volume_history", [])))
+    if all_volume_ids:
         found = ec2.describe_snapshots(
-            OwnerIds=["self"], Filters=[{"Name": "volume-id", "Values": list(volumes.values())}]
+            OwnerIds=["self"], Filters=[{"Name": "volume-id", "Values": all_volume_ids}]
         )["Snapshots"]
         snap_ids.update(s["SnapshotId"] for s in found)
     for sid in sorted(snap_ids):
