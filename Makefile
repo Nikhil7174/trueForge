@@ -1,6 +1,6 @@
 PY ?= .venv/bin/python
 
-.PHONY: seed teardown doctor
+.PHONY: seed teardown doctor mcp-cost mcp-iam agent
 
 # Create the us-west-2 resources the hygiene agent works on (idempotent).
 seed:
@@ -13,3 +13,14 @@ teardown:
 # Probe the AWS permissions the MCP servers need (read-only / dry-run).
 doctor:
 	$(PY) infra/doctor.py
+
+# MCP servers TrueForge connects to (run each in its own terminal).
+mcp-cost:
+	.venv/bin/tf-cost-mcp
+
+mcp-iam:
+	IAM_BACKEND=$${IAM_BACKEND:-aws} .venv/bin/tf-mcp
+
+# Register skills, connectors and the umbrella agent in TrueForge.
+agent:
+	IAM_BACKEND=$${IAM_BACKEND:-aws} .venv/bin/tf-seed $${UMBRELLA_AGENT_NAME:-aws-hygiene}
