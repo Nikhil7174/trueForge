@@ -7,6 +7,7 @@ Generic TrueForge integration: **one adapter, many agent plugins**.
 | **access-reviewer** | Official starter #05: reach IAM, find unused access | `revoke_access` |
 | **migration-rehearsal** | Restore prod into a sandbox, run a Postgres migration there, diff every row, report a SAFE / REVIEW / BLOCK verdict. Setup and demo: [docs/migration-rehearsal.md](docs/migration-rehearsal.md) | `apply_migration` |
 | **release-captain** | Read the commits since the last tag, run the tests in a sandbox, draft release notes - and refuse to publish while any migration in the release is unapplied. Setup and demo: [docs/release-captain.md](docs/release-captain.md) | `publish_release` |
+| **ticket-resolver** | Reproduce a Linear bug ticket in a sandbox, prove any fix, and reply only after approval. Data corrections are handed, in order, to migration-rehearsal and the reply waits for db-gate's verdict: [docs/ticket-migration-handoff.md](docs/ticket-migration-handoff.md) | `reply_to_customer` |
 
 TrueForge runs the agent loop. We only supply the job, MCP tools, **skills catalog**, and approval policy.
 
@@ -34,6 +35,7 @@ tests/migration_rehearsal_e2e.py             # 28 guard checks against db-gate, 
 tests/release_captain_e2e.py                 # 27 guard checks against ship-gate, no GitHub needed
 docs/migration-rehearsal.md                  # migration-rehearsal setup + demo script
 docs/release-captain.md                      # release-captain setup + demo script
+docs/ticket-migration-handoff.md             # ticket-resolver → migration-rehearsal serial handoff
 ```
 
 ## Skills vs agents

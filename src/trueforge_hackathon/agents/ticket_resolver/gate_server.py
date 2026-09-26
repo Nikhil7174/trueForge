@@ -3,13 +3,16 @@
 MCP tools (streamable HTTP, bearer auth):
   export_source      packs the product code for one in-scope ticket, delivered as text to the sandbox
   submit_attempt     verifies a sandbox repro report, recomputes its outcome, re-applies its patch, labels the ticket
+  request_migration  hands SQL to the migration-rehearsal agent (queued, serial): a REPRODUCED_NO_FIX data correction
+                     the agent wrote, or a migration a ticket asks to have rehearsed (SQL must be in the ticket)
   propose_reply      checks a draft reply against the outcome and the content rules, stores it
   reply_to_customer  posts a proposed draft to the ticket, exactly as proposed (destructive, needs approval)
   record_decline     marks a draft declined after a human denied it
   ticket_status      ledger view for one ticket
 
 Config (env or ./.env): LINEAR_API_KEY, LINEAR_TEAM_KEY (ZYN), LINEAR_TRIGGER_LABEL (Bug), TICKET_GATE_TOKEN,
-TICKET_GATE_HOST, TICKET_GATE_PORT (8821), TICKET_REPO_PATH (demo aco-api), TICKET_GATE_STATE_DIR (./.ticket-gate).
+TICKET_GATE_HOST, TICKET_GATE_PORT (8821), TICKET_REPO_PATH (demo aco-api), TICKET_GATE_STATE_DIR (./.ticket-gate),
+GATE_STATE_DIR (db-gate's ledger, read-only here, ./.gate).
 Run with `tf-ticket-gate` (or `python -m trueforge_hackathon ticket-gate`).
 """
 from __future__ import annotations
@@ -18,6 +21,7 @@ import datetime as dt
 import hmac
 import json
 import os
+import re
 import secrets
 import shlex
 import shutil
@@ -35,6 +39,10 @@ from trueforge_hackathon.env import load_env_file
 REPO_ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(REPO_ROOT / "skills" / "ticket-resolver" / "scripts"))
 import ticketcore as tc  # noqa: E402
+
+# gatecore hashes migrations the same way db-gate does, so a handoff's sha matches the sha db-gate rehearsed.
+sys.path.insert(0, str(REPO_ROOT / "skills" / "migration-rehearsal" / "scripts"))
+import gatecore  # noqa: E402
 
 load_env_file()
 
@@ -58,6 +66,12 @@ TEAM_KEY = os.environ.get("LINEAR_TEAM_KEY", "ZYN")
 TRIGGER_LABEL = os.environ.get("LINEAR_TRIGGER_LABEL", "Bug")
 SKIP_LABEL = os.environ.get("TICKET_SKIP_LABEL", "agent-skip")
 MAX_ATTEMPT_AGE = dt.timedelta(hours=float(os.environ.get("TICKET_MAX_ATTEMPT_AGE_HOURS", "24")))
+DB_GATE_STATE_DIR = Path(os.environ.get("GATE_STATE_DIR", Path.cwd() / ".gate"))
+MAX_MIGRATION_BYTES = 200_000
+MIGRATION_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,80}\.sql$")
+OPEN_HANDOFF = ("queued", "rehearsing")
+MIGRATION_REQUEST = "MIGRATION_REQUEST"  # attempt outcome for a ticket that asks for a migration to be rehearsed
+SQL_BLOCK = re.compile(r"```[ \t]*(?:sql|postgres(?:ql)?|pgsql)?[ \t]*\n(.*?)```", re.I | re.S)
 
 AGENT_GROUP, REPRO_GROUP = "Agent", "Repro"
 OUTCOME_LABELS = {tc.FIXED: "Fixed", tc.REPRODUCED_NO_FIX: "Reproduced, no fix", tc.NOT_REPRODUCED: "Not reproduced"}
@@ -96,6 +110,10 @@ def ledger() -> sqlite3.Connection:
     CREATE TABLE IF NOT EXISTS triggered_issues (
         issue TEXT PRIMARY KEY, issue_uuid TEXT, session_id TEXT, status TEXT, detail TEXT,
         triggered_at TEXT, updated_at TEXT);
+    CREATE TABLE IF NOT EXISTS handoffs (
+        handoff_id TEXT PRIMARY KEY, issue TEXT, attempt_id TEXT, migration_name TEXT, migration_sql TEXT,
+        migration_sha256 TEXT, reason TEXT, status TEXT, ticket_session_id TEXT, rehearsal_session_id TEXT,
+        rehearsal_id TEXT, verdict TEXT, summary TEXT, detail TEXT, requested_at TEXT, updated_at TEXT);
     """)
     return db
 
@@ -278,7 +296,166 @@ def _submit_attempt(issue_id: str, report_json: str) -> dict:
     }
 
 
+# ---------------------------------------------------------------- request_migration (handoff to migration-rehearsal)
+
+def db_gate_rehearsal(sha: str, since: str) -> dict | None:
+    """db-gate's latest verdict for this exact SQL, submitted at or after `since`. Read-only: db-gate owns its ledger."""
+    path = DB_GATE_STATE_DIR / "ledger.db"
+    if not path.exists():
+        return None
+    db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    db.row_factory = sqlite3.Row
+    try:
+        row = db.execute("SELECT rehearsal_id, verdict, summary, submitted_at FROM rehearsals "
+                         "WHERE migration_sha256 = ? AND submitted_at >= ? ORDER BY submitted_at DESC, rowid DESC "
+                         "LIMIT 1", (sha, since)).fetchone()
+    except sqlite3.OperationalError:  # db-gate hasn't created its tables yet
+        return None
+    finally:
+        db.close()
+    return dict(row) if row else None
+
+
+def set_handoff(handoff_id: str, **fields) -> None:
+    fields["updated_at"] = now().isoformat()
+    cols = ", ".join(f"{k} = ?" for k in fields)
+    with ledger() as db:
+        db.execute(f"UPDATE handoffs SET {cols} WHERE handoff_id = ?", (*fields.values(), handoff_id))
+
+
+def get_handoff(handoff_id: str) -> dict | None:
+    with ledger() as db:
+        row = db.execute("SELECT * FROM handoffs WHERE handoff_id = ?", (handoff_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def refresh_handoff(handoff_id: str) -> dict | None:
+    """Close an open handoff once db-gate has a verdict for its SQL. The verdict comes from db-gate's ledger, never
+    from an agent."""
+    h = get_handoff(handoff_id)
+    if h is None or h["status"] not in OPEN_HANDOFF:
+        return h
+    rh = db_gate_rehearsal(h["migration_sha256"], h["requested_at"])
+    if rh:
+        set_handoff(handoff_id, status="rehearsed", rehearsal_id=rh["rehearsal_id"], verdict=rh["verdict"],
+                    summary=rh["summary"])
+        h = get_handoff(handoff_id)
+    return h
+
+
+def latest_handoff(attempt_id: str) -> dict | None:
+    with ledger() as db:
+        row = db.execute("SELECT handoff_id FROM handoffs WHERE attempt_id = ? ORDER BY requested_at DESC, rowid DESC "
+                         "LIMIT 1", (attempt_id,)).fetchone()
+    return refresh_handoff(row["handoff_id"]) if row else None
+
+
+def ticket_sql_blocks(issue: dict) -> list[str]:
+    """Every fenced SQL block the customer wrote (description and their comments), normalised like db-gate does."""
+    return [gatecore.normalize_sql(b) for b in SQL_BLOCK.findall(ticket_text(issue))]
+
+
+def _ticket_request_attempt(issue_id: str, migration_sql: str) -> tuple[sqlite3.Row | None, str | None]:
+    """A migration-request ticket has nothing to reproduce. Record it as an attempt so the reply path (drafts,
+    staleness, fingerprint) is the same, but only for SQL the ticket itself contains."""
+    issue, problem = fetch_in_scope(issue_id)
+    if problem:
+        return None, problem
+    blocks = ticket_sql_blocks(issue)
+    if not blocks:
+        return None, (f"{issue['identifier']} has no fenced SQL block; a migration request must include the SQL. "
+                      "If this is a bug report, reproduce it and use attempt_id instead")
+    if gatecore.normalize_sql(migration_sql or "") not in blocks:
+        return None, (f"migration_sql is not one of the SQL blocks in {issue['identifier']}. Pass the ticket's SQL "
+                      "exactly as written; propose changes in the reply instead")
+    attempt_id = "att_" + secrets.token_hex(4)
+    with ledger() as db:
+        db.execute("INSERT INTO attempts VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                   (attempt_id, issue["identifier"], issue["id"], None, MIGRATION_REQUEST,
+                    "the ticket asks for a migration to be rehearsed", "[]", None, None, ticket_fingerprint(issue),
+                    now().isoformat()))
+        return db.execute("SELECT * FROM attempts WHERE attempt_id = ?", (attempt_id,)).fetchone(), None
+
+
+def _request_migration(attempt_id: str, migration_name: str, migration_sql: str, reason: str,
+                       issue_id: str = "") -> dict:
+    issue_id = (issue_id or "").strip().upper()
+    if bool(attempt_id) == bool(issue_id):
+        return refuse("pass exactly one of attempt_id (a REPRODUCED_NO_FIX correction you wrote) or issue_id "
+                      "(a ticket that asks for its own SQL to be rehearsed)")
+    if not MIGRATION_NAME.match(migration_name or ""):
+        return refuse("migration_name must be a plain file name ending in .sql, e.g. 0102_merge_duplicate_members.sql")
+    if not (migration_sql or "").strip():
+        return refuse("migration_sql is empty")
+    if len(migration_sql.encode()) > MAX_MIGRATION_BYTES:
+        return refuse(f"migration_sql is over {MAX_MIGRATION_BYTES} bytes")
+    if len((reason or "").strip()) < 20:
+        return refuse("reason must say, in a sentence or two, what the migration does and why it needs rehearsing")
+    if issue_id:
+        with ledger() as db:
+            open_one = db.execute(f"SELECT handoff_id FROM handoffs WHERE issue = ? AND status IN "
+                                  f"({','.join('?' * len(OPEN_HANDOFF))})",
+                                  (issue_id, *OPEN_HANDOFF)).fetchone()
+        if open_one:
+            return refuse(f"{issue_id} already has an open migration handoff {open_one['handoff_id']}; "
+                          "wait for its verdict")
+        attempt, problem = _ticket_request_attempt(issue_id, migration_sql)
+        if problem:
+            return refuse(problem)
+        attempt_id = attempt["attempt_id"]
+    else:
+        with ledger() as db:
+            attempt = db.execute("SELECT * FROM attempts WHERE attempt_id = ?", (attempt_id,)).fetchone()
+        if attempt is None:
+            return refuse(f"unknown attempt_id {attempt_id!r}")
+        if attempt["outcome"] != tc.REPRODUCED_NO_FIX:
+            return refuse(f"only a {tc.REPRODUCED_NO_FIX} attempt can hand a data correction to migration-rehearsal; "
+                          f"this one is {attempt['outcome']}")
+    with ledger() as db:
+        replied = db.execute("SELECT 1 FROM replies WHERE attempt_id = ?", (attempt_id,)).fetchone()
+    if replied:
+        return refuse(f"a reply for {attempt_id} was already sent")
+    issue, problem = fetch_in_scope(attempt["issue"])
+    if problem or (problem := attempt_problem(attempt, issue)):
+        return refuse(problem)
+
+    handoff_id = "ho_" + secrets.token_hex(4)
+    sha = gatecore.sql_sha256(migration_sql)
+    with ledger() as db:
+        open_one = db.execute(f"SELECT handoff_id FROM handoffs WHERE issue = ? AND status IN "
+                              f"({','.join('?' * len(OPEN_HANDOFF))})", (attempt["issue"], *OPEN_HANDOFF)).fetchone()
+        if open_one:
+            return refuse(f"{attempt['issue']} already has an open migration handoff {open_one['handoff_id']}; "
+                          "wait for its verdict")
+        db.execute("UPDATE drafts SET status = 'superseded', closed_at = ? WHERE attempt_id = ? AND status = 'proposed'",
+                   (now().isoformat(), attempt_id))
+        db.execute("INSERT INTO handoffs (handoff_id, issue, attempt_id, migration_name, migration_sql, "
+                   "migration_sha256, reason, status, requested_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                   (handoff_id, attempt["issue"], attempt_id, migration_name, migration_sql, sha, reason.strip(),
+                    "queued", now().isoformat(), now().isoformat()))
+    return {
+        "ok": True,
+        "handoff_id": handoff_id,
+        "attempt_id": attempt_id,
+        "issue": attempt["issue"],
+        "migration_name": migration_name,
+        "migration_sha256": sha,
+        "status": "queued",
+        "next": ("Stop here: end your turn with a two-line status and do not draft the reply yet. When this turn ends, "
+                 "the migration-rehearsal agent rehearses the SQL in its own session; this session is then resumed "
+                 "with db-gate's verdict. propose_reply is refused until then."),
+    }
+
+
 # ---------------------------------------------------------------- propose_reply / reply_to_customer
+
+def reply_outcome(attempt: sqlite3.Row) -> str:
+    """The outcome a reply is checked and headed against. A migration request's is the rehearsal verdict."""
+    if attempt["outcome"] != MIGRATION_REQUEST:
+        return attempt["outcome"]
+    h = latest_handoff(attempt["attempt_id"])
+    return f"MIGRATION_{h['verdict']}" if h and h["status"] == "rehearsed" else "MIGRATION_NO_VERDICT"
+
 
 def _check_draft(attempt: sqlite3.Row, body: str) -> tuple[dict | None, str | None, list[str]]:
     issue, problem = fetch_in_scope(attempt["issue"])
@@ -287,7 +464,7 @@ def _check_draft(attempt: sqlite3.Row, body: str) -> tuple[dict | None, str | No
     problem = attempt_problem(attempt, issue)
     if problem:
         return issue, problem, []
-    return issue, None, policy.check_reply(body, attempt["outcome"], ticket_text(issue),
+    return issue, None, policy.check_reply(body, reply_outcome(attempt), ticket_text(issue),
                                            [linear.api_key, GATE_TOKEN])
 
 
@@ -299,6 +476,10 @@ def _propose_reply(attempt_id: str, body: str) -> dict:
         return refuse(f"unknown attempt_id {attempt_id!r}")
     if replied:
         return refuse(f"a reply for {attempt_id} was already sent")
+    handoff = latest_handoff(attempt_id)
+    if handoff and handoff["status"] in OPEN_HANDOFF:
+        return refuse(f"migration handoff {handoff['handoff_id']} is {handoff['status']}; the reply waits for "
+                      "db-gate's verdict. End your turn; this session is resumed when the rehearsal finishes.")
     issue, problem, problems = _check_draft(attempt, body)
     if problem:
         return refuse(problem)
@@ -306,7 +487,9 @@ def _propose_reply(attempt_id: str, body: str) -> dict:
         return refuse("draft not accepted: " + "; ".join(problems), problems=problems)
 
     draft_id = "dr_" + secrets.token_hex(4)
-    final_body = policy.render_reply(body, attempt["outcome"])
+    outcome = reply_outcome(attempt)
+    final_body = policy.render_reply(body, outcome, rehearsal_summary=(
+        handoff["summary"] if handoff and handoff["status"] == "rehearsed" else None))
     with ledger() as db:
         db.execute("UPDATE drafts SET status = 'superseded', closed_at = ? WHERE attempt_id = ? AND status = 'proposed'",
                    (now().isoformat(), attempt_id))
@@ -317,8 +500,10 @@ def _propose_reply(attempt_id: str, body: str) -> dict:
         "ok": True,
         "draft_id": draft_id,
         "issue": attempt["issue"],
-        "outcome": attempt["outcome"],
+        "outcome": outcome,
         "will_post": final_body,
+        "migration": ({k: handoff[k] for k in ("handoff_id", "migration_name", "status", "verdict", "summary")}
+                      if handoff else None),
         "label": f"{AGENT_GROUP} → Awaiting approval" + (f" (not set: {label_error})" if label_error else ""),
         "next": "call reply_to_customer(draft_id, body) with the same body; a human approves it",
     }
@@ -391,6 +576,9 @@ def _ticket_status(issue_id: str) -> dict:
             "attempts": rows("SELECT attempt_id, source_id, outcome, summary, submitted_at FROM attempts WHERE issue = ?"),
             "drafts": rows("SELECT draft_id, attempt_id, status, proposed_at, closed_at, note FROM drafts WHERE issue = ?"),
             "replies": rows("SELECT draft_id, attempt_id, comment_url, posted_at FROM replies WHERE issue = ?"),
+            "handoffs": rows("SELECT handoff_id, attempt_id, migration_name, migration_sha256, status, verdict, summary, "
+                             "ticket_session_id, rehearsal_session_id, detail, requested_at, updated_at "
+                             "FROM handoffs WHERE issue = ?"),
         }
 
 
@@ -400,8 +588,8 @@ mcp = MCPServer(
     "ticket-gate",
     instructions=(
         "Gatekeeper between the ticket-resolver agent and Linear. The agent never holds Linear write access. "
-        "Flow: export_source -> reproduce in the sandbox -> submit_attempt -> propose_reply -> "
-        "(human-approved) reply_to_customer."),
+        "Flow: export_source -> reproduce in the sandbox -> submit_attempt -> [request_migration -> wait for the "
+        "migration-rehearsal verdict] -> propose_reply -> (human-approved) reply_to_customer."),
 )
 
 
@@ -430,6 +618,31 @@ async def submit_attempt(issue_id: str, report_json: str) -> dict:
     (FIXED / REPRODUCED_NO_FIX / NOT_REPRODUCED) and summary from the raw evidence, re-applies any patch to the
     exported source, and sets the ticket's Repro label. Returns attempt_id and the outcome."""
     return await anyio.to_thread.run_sync(_submit_attempt, issue_id, report_json)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(title="Hand a data correction to migration-rehearsal", read_only_hint=False,
+                                destructive_hint=False, idempotent_hint=False, open_world_hint=False),
+)
+async def request_migration(migration_name: str, migration_sql: str, reason: str, attempt_id: str = "",
+                            issue_id: str = "") -> dict:
+    """Queue SQL for the separate migration-rehearsal agent. Nothing touches any database here. Two uses:
+
+    - attempt_id: a REPRODUCED_NO_FIX attempt whose fix is a data correction you wrote.
+    - issue_id (e.g. ZYN-9): a ticket that asks for a migration to be rehearsed. migration_sql must be one of the
+      ticket's fenced SQL blocks, exactly; nothing to reproduce. The result's attempt_id is used for propose_reply.
+
+    Pass exactly one of them, plus:
+    - migration_name: the file name (the ticket's, if it names one), e.g. 0102_merge_duplicate_members.sql
+    - migration_sql: the full Postgres migration, exactly as it should be rehearsed
+    - reason: what it does and why it needs rehearsing
+
+    After this call, end your turn. The migration-rehearsal agent rehearses the SQL on a production snapshot in its
+    own session, db-gate records SAFE / REVIEW / BLOCK, and then this session is resumed with that verdict.
+    propose_reply is refused until the verdict exists. Nothing is applied: apply stays with migration-rehearsal
+    behind its own approval."""
+    return await anyio.to_thread.run_sync(_request_migration, attempt_id, migration_name, migration_sql, reason,
+                                          issue_id)
 
 
 @mcp.tool(

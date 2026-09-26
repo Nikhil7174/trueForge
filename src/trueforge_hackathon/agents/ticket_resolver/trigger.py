@@ -1,11 +1,15 @@
 """tf-ticket-trigger: starts a ticket-resolver session in TrueForge when a bug ticket appears in Linear.
 
   tf-ticket-trigger                          serve: webhook endpoint + poll backstop (TRIGGER_MODE=both)
+                                             + the migration handoff worker (see handoff.py)
+  tf-ticket-trigger handoffs                 only the handoff worker, for tickets started by hand in the UI
   tf-ticket-trigger register-webhook <url>   create/update the Linear webhook, e.g. https://<tunnel>/linear/webhook
 
 A ticket qualifies when it is in team LINEAR_TEAM_KEY, has label LINEAR_TRIGGER_LABEL and not TICKET_SKIP_LABEL,
 either on creation or when the label is added later. Each ticket starts at most one session (ledger dedupe).
 The session runs until it finishes or pauses on reply_to_customer; a person approves in the TrueForge UI.
+If the ticket needs a database correction, the session ends after request_migration instead; the handoff worker
+then runs the migration-rehearsal agent and resumes the same ticket session with db-gate's verdict.
 
 Config (env or ./.env): LINEAR_API_KEY, LINEAR_WEBHOOK_SECRET, TRIGGER_MODE (both|webhook|poll),
 TRIGGER_POLL_SECONDS (60), TRIGGER_MAX_CONCURRENT (2), TICKET_TRIGGER_HOST, TICKET_TRIGGER_PORT (8822).
@@ -29,6 +33,7 @@ load_env_file()
 from trueforge_hackathon.adapter.client import create_trueforge_client  # noqa: E402
 from trueforge_hackathon.adapter.run_session import create_agent_session, run_agent_message  # noqa: E402
 from trueforge_hackathon.agents.ticket_resolver import gate_server as gate  # noqa: E402
+from trueforge_hackathon.agents.ticket_resolver import handoff  # noqa: E402
 from trueforge_hackathon.agents.ticket_resolver.linear import LinearError  # noqa: E402
 
 AGENT_NAME = "ticket-resolver"
@@ -75,7 +80,8 @@ def set_status(ident: str, status: str, session_id: str | None = None, detail: s
 def message_for(issue: dict) -> str:
     return (f"Resolve {issue['identifier']}. This session was started automatically by the trigger because the "
             f"ticket was filed with the {gate.TRIGGER_LABEL} label. Run the whole job and finish by calling "
-            "reply_to_customer, so a person can approve or deny the reply.")
+            "reply_to_customer, so a person can approve or deny the reply. If the fix is a database correction, "
+            "call request_migration instead and end your turn: you'll be resumed with the rehearsal verdict.")
 
 
 def run_session(issue: dict):
@@ -83,7 +89,7 @@ def run_session(issue: dict):
     with _slots:
         try:
             client = create_trueforge_client()
-            session_id = create_agent_session(client, {"name": AGENT_NAME})
+            session_id = create_agent_session(client, {"name": AGENT_NAME}, metadata={"ticket": ident})
             set_status(ident, "running", session_id)
             log(f"{ident}: session {session_id} started ({UI_URL})")
             result = run_agent_message(client, message=message_for(issue), session_id=session_id)
@@ -99,9 +105,20 @@ def run_session(issue: dict):
     elif result.pending_questions:
         set_status(ident, "awaiting_answer", detail=result.pending_questions[0].question[:500])
         log(f"{ident}: the agent asked a question; answer it in session {session_id}")
+    elif queued_handoff(ident):
+        set_status(ident, "handed_off", detail=queued_handoff(ident))
+        log(f"{ident}: handed a migration to migration-rehearsal ({queued_handoff(ident)}); "
+            "the ticket session resumes with its verdict")
     else:
         set_status(ident, "finished", detail=result.status)
         log(f"{ident}: session finished ({result.status}) without asking to reply")
+
+
+def queued_handoff(ident: str) -> str | None:
+    with gate.ledger() as db:
+        row = db.execute("SELECT handoff_id FROM handoffs WHERE issue = ? AND status IN ('queued', 'rehearsing') "
+                         "ORDER BY requested_at DESC LIMIT 1", (ident,)).fetchone()
+    return row["handoff_id"] if row else None
 
 
 def dispatch(issue_ref: str, source: str) -> str:
@@ -185,8 +202,11 @@ def make_app():
         with gate.ledger() as db:
             rows = [dict(r) for r in db.execute(
                 "SELECT issue, status, session_id, updated_at FROM triggered_issues ORDER BY triggered_at DESC LIMIT 20")]
+            handoffs = [dict(r) for r in db.execute(
+                "SELECT handoff_id, issue, migration_name, status, verdict, ticket_session_id, rehearsal_session_id, "
+                "updated_at FROM handoffs ORDER BY requested_at DESC LIMIT 20")]
         return JSONResponse({"ok": True, "mode": MODE, "team": gate.TEAM_KEY, "label": gate.TRIGGER_LABEL,
-                             "recent": rows})
+                             "recent": rows, "handoffs": handoffs})
 
     return Starlette(routes=[Route("/linear/webhook", webhook, methods=["POST"]), Route("/healthz", healthz)])
 
@@ -271,6 +291,7 @@ def serve():
         sys.exit("TRIGGER_MODE must be both, webhook or poll")
     if MODE in ("both", "webhook") and not WEBHOOK_SECRET:
         sys.exit("tf-ticket-trigger: LINEAR_WEBHOOK_SECRET is not set; set it or use TRIGGER_MODE=poll")
+    threading.Thread(target=handoff.work_forever, name="handoffs", daemon=True).start()
     if MODE in ("both", "poll"):
         threading.Thread(target=poll_forever, name="poll", daemon=True).start()
     if MODE == "poll":
@@ -285,12 +306,15 @@ def serve():
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Start ticket-resolver sessions for new Linear bug tickets.")
     sub = parser.add_subparsers(dest="command")
-    sub.add_parser("serve", help="webhook endpoint + poll backstop (default)")
+    sub.add_parser("serve", help="webhook endpoint + poll backstop + handoff worker (default)")
+    sub.add_parser("handoffs", help="only the ticket -> migration-rehearsal handoff worker")
     reg = sub.add_parser("register-webhook", help="create or update the Linear webhook")
     reg.add_argument("url", help="public URL ending in /linear/webhook")
     args = parser.parse_args(argv)
     if args.command == "register-webhook":
         register_webhook(args.url)
+    elif args.command == "handoffs":
+        handoff.work_forever()
     else:
         serve()
 

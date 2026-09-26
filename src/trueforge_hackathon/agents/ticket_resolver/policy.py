@@ -12,6 +12,14 @@ HEADERS = {
     "FIXED": "**Status: reproduced and fixed.** The fix is written and tested; it is pending review and release.",
     "REPRODUCED_NO_FIX": "**Status: confirmed.** We reproduced this; it needs a follow-up decision before it can be fixed.",
     "NOT_REPRODUCED": "**Status: could not reproduce.** Details of what we checked are below.",
+    # A ticket that asked for a migration to be rehearsed: the header is the rehearsal verdict. Nothing is applied.
+    "MIGRATION_SAFE": "**Status: rehearsed, verdict SAFE.** It ran cleanly on a copy of production. It has not been "
+                      "applied; applying is a separate, approved step.",
+    "MIGRATION_REVIEW": "**Status: rehearsed, verdict REVIEW.** It changes existing data; a person must accept those "
+                        "changes before it can be applied. It has not been applied.",
+    "MIGRATION_BLOCK": "**Status: rehearsed, verdict BLOCK.** It must not be applied as written. Nothing was applied.",
+    "MIGRATION_NO_VERDICT": "**Status: not rehearsed.** The rehearsal did not produce a verdict for this SQL. Nothing "
+                            "was applied.",
 }
 
 SECRET_PATTERNS = [
@@ -27,9 +35,9 @@ SECRET_PATTERNS = [
 INTERNAL_PATTERNS = [
     (re.compile(r"(?:^|[\s(`'\"])/(?:tmp|opt|home|Users|var|private)/\S*"), "a sandbox or server file path"),
     (re.compile(r"\b(?:pristine|state\.json|repro\.py|ticketcore|report\.json|patch\.diff)\b"), "internal tooling names"),
-    (re.compile(r"\b(?:ticket-gate|export_source|submit_attempt|propose_reply|reply_to_customer)\b"), "internal tool names"),
+    (re.compile(r"\b(?:ticket-gate|db-gate|export_source|submit_attempt|request_migration|propose_reply|reply_to_customer)\b"), "internal tool names"),
     (re.compile(r"Traceback \(most recent call last\)|^\s*File \".*\", line \d+", re.M), "a stack trace"),
-    (re.compile(r"\b(?:src|att|dr)_[0-9a-f]{8}\b"), "internal ids"),
+    (re.compile(r"\b(?:src|att|dr|ho|rh|snap)_[0-9a-f]{8}\b"), "internal ids"),
 ]
 
 # Claims a reply may only make when the gate's outcome is FIXED.
@@ -94,7 +102,9 @@ def check_reply(body: str, outcome: str, ticket_text: str, known_secrets: list[s
     return problems
 
 
-def render_reply(body: str, outcome: str) -> str:
-    """The exact text posted to the ticket: the gate's status header, the approved body, a disclosure line."""
-    return (f"{HEADERS[outcome]}\n\n{body.strip()}\n\n"
+def render_reply(body: str, outcome: str, rehearsal_summary: str | None = None) -> str:
+    """The exact text posted to the ticket: the gate's status header, the approved body, db-gate's rehearsal summary
+    when there is one (verbatim, never the agent's), and a disclosure line."""
+    rehearsal = f"Rehearsal result: `{rehearsal_summary}`\n\n" if rehearsal_summary else ""
+    return (f"{HEADERS[outcome]}\n\n{body.strip()}\n\n{rehearsal}"
             "_Investigated by the ticket-resolver agent; reviewed and approved by a person before sending._")
