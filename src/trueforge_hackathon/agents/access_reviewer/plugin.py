@@ -70,6 +70,10 @@ def create_access_reviewer_plugin() -> AgentPlugin:
             "and revoke nothing until a human approves."
         ),
         "manifest": _manifest(include_skills=attach_skills),
+        "default_message": (
+            "Review unused IAM access in this account. Show the unused table with blast radius. "
+            "Do not revoke anything yet."
+        ),
         "mcp": {
             "name": ACCESS_REVIEWER_MCP_NAME,
             "url": _mcp_url(),

@@ -20,6 +20,8 @@ bash $SKILL_DIR/scripts/setup_sandbox.sh
 Wait for `READY`. If the command times out, run it in the background
 (`nohup bash $SKILL_DIR/scripts/setup_sandbox.sh > /tmp/setup.log 2>&1 &`) and poll
 `tail -1 /tmp/setup.log` until it says `READY`.
+If it fails, report its last lines and stop. Don't install another Postgres, write a stand-in
+`pgserver` module, or patch the scripts: a rehearsal on a different engine proves nothing about prod.
 
 ## 2. Save the migration exactly as given
 
