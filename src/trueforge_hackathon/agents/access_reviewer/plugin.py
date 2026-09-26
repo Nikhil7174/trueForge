@@ -52,7 +52,7 @@ def _aws_instructions() -> str:
             "Delegate evidence gathering to one subagent per role (create_sub_agent): get_role_policies, get_service_last_accessed, "
             "get_role_cloudtrail_activity. Subagents gather and summarise only; they never ask questions or call destructive tools.",
             "Synthesise the least-privilege policy, the diff and the lint in the sandbox with stdlib Python "
-            "(skills/access-review-playbook/scripts/lint_policy.py). The sandbox has no AWS credentials; pass evidence inline.",
+            "(/opt/tf/skills/access-review-playbook/scripts/lint_policy.py). The sandbox has no AWS credentials; pass evidence inline.",
             "Weigh telemetry honestly: service-last-accessed lags up to ~4 h, CloudTrail minutes. "
             "'Insufficient evidence, no revocation' is a valid outcome.",
             "Render PolicyDiff and BlastRadius cards, then a PreApproval card right before each gated call "

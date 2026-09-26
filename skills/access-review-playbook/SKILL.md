@@ -76,7 +76,7 @@ Once the evidence is in, ask which change to prepare. Build the options from the
 
 1. Write the evidence JSON and the current policy documents to files in the sandbox.
 2. Build the least-privilege policy from the actions actually used, scoped as narrowly as the evidence allows.
-3. Run `python3 /path/to/skill/scripts/lint_policy.py new.json current_union.json`. The lint has to pass: no wildcard actions, no IAM actions on `*`, no new privilege-escalation actions, nothing the role does not already have, and any condition kept for an action that still needs it. The MCP runs the same lint on `put_role_policy` and refuses violations.
+3. Run `python3 /opt/tf/skills/access-review-playbook/scripts/lint_policy.py new.json current_union.json`. The lint has to pass: no wildcard actions, no IAM actions on `*`, no new privilege-escalation actions, nothing the role does not already have, and any condition kept for an action that still needs it. The MCP runs the same lint on `put_role_policy` and refuses violations.
 4. Print the diff: removed / added / kept, per service, with evidence of use.
 
 ### Present
