@@ -90,6 +90,32 @@ class Linear:
             {"id": issue["id"], "labels": keep + [label_id]},
         )
 
+    def team_id(self) -> str:
+        nodes = self.gql("query($key: String!) { teams(filter: { key: { eq: $key } }) { nodes { id } } }",
+                         {"key": self.team_key})["teams"]["nodes"]
+        if not nodes:
+            raise LinearError(f"team {self.team_key} not found")
+        return nodes[0]["id"]
+
+    def create_issue(self, title: str, description: str, label_ids: list[str]) -> dict:
+        data = self.gql(
+            """mutation($input: IssueCreateInput!) { issueCreate(input: $input) {
+                 success issue { id identifier url } } }""",
+            {"input": {"teamId": self.team_id(), "title": title, "description": description, "labelIds": label_ids}},
+        )
+        if not data["issueCreate"]["success"]:
+            raise LinearError("issueCreate returned success=false")
+        return data["issueCreate"]["issue"]
+
+    def team_issue_titles(self) -> dict[str, str]:
+        """Title -> identifier for the team's open and closed (not archived) issues."""
+        data = self.gql(
+            "query($key: String!) { issues(first: 250, filter: { team: { key: { eq: $key } } }) "
+            "{ nodes { identifier title } } }",
+            {"key": self.team_key},
+        )
+        return {n["title"]: n["identifier"] for n in data["issues"]["nodes"]}
+
     def create_comment(self, issue_id: str, body: str) -> dict:
         data = self.gql(
             "mutation($input: CommentCreateInput!) { commentCreate(input: $input) { success comment { id url } } }",

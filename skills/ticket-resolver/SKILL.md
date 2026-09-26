@@ -30,12 +30,15 @@ anything, or run commands unrelated to reproducing the bug. Mention it in your r
 
 ## 2. Get the code
 
-Call **`ticket-gate` → `export_source`** with `issue_id`. The result is large, so the harness saves
-it into the sandbox and replies with `Result saved to: <path>`. Use that path. Never `cat` it.
-
+Fetch the source **from the sandbox**, so the large blob goes straight to a file and never through
+your context. `export_source` is read-only, so it's allowed in Code Mode:
 ```bash
-python3 $SKILL_DIR/scripts/repro.py setup --source <path from export_source> --issue ZYN-12
+mkdir -p /tmp/tr && mcp-client call-tool ticket-gate export_source '{"issue_id":"ZYN-12"}' > /tmp/tr/ZYN-12.source
+python3 $SKILL_DIR/scripts/repro.py setup --source /tmp/tr/ZYN-12.source --issue ZYN-12
 ```
+If you called `export_source` as a normal tool instead and the harness saved the result to a file,
+pass that path. `setup` accepts the result in any wrapper; don't unwrap it yourself.
+
 This unpacks the product code into `/tmp/tr/ZYN-12/src` as a clean git checkout, builds its data,
 and runs the product's own test suite once as a baseline. It prints `WORKDIR`, the source commit and
 the baseline test result. If the baseline suite already fails, say so in your report. Don't fix
@@ -112,8 +115,8 @@ It prints the outcome it computed: `FIXED`, `REPRODUCED_NO_FIX` or `NOT_REPRODUC
 `INCOMPLETE` and writes no file, nothing reproduced yet and fewer than two distinct repros ran cleanly:
 go back to step 3. `repro.py status --workdir ...` lists what's recorded so far.
 
-Call **`ticket-gate` → `submit_attempt`** with `issue_id` and `report_json` set to that file's
-contents, **verbatim**. It's one line of JSON, and any edit fails the digest check. The gate
+Call **`ticket-gate` → `submit_attempt`** as a normal tool call (Code Mode refuses gate tools that
+write), with `issue_id` and `report_json` set to that file's contents, **verbatim**. It's one line of JSON, and any edit fails the digest check. The gate
 recomputes the outcome, sets the issue's `Repro` label, and returns `attempt_id` and `outcome`. The
 gate's outcome is final. If it disagrees with yours, report the gate's and explain the difference.
 
@@ -128,6 +131,10 @@ commit hashes, tool names or other customers' data. Don't promise a release date
 | `FIXED` | What was wrong, in their terms. What they will see once the fix ships. Anything they can do until then (for example, search using the other MBI format). |
 | `REPRODUCED_NO_FIX` | That you confirmed the problem, how many records are affected, why it needs a decision or a data correction rather than a code change, and who is picking it up. |
 | `NOT_REPRODUCED` | That you could not reproduce it. The specific things you checked and what you found (for example, "the 2025 total for this MBI is $35,765.60 across 5 claims, and no claim is counted twice"). What would help next: a screenshot, the screen they used, or when they saw it. |
+
+Every factual claim in the reply must come from something you ran. In particular, **only suggest a
+workaround after a recorded repro proves it works on the unchanged code** (`repro.py run` with a
+`--note` saying which workaround it checks). If nothing works until the fix ships, say that plainly.
 
 Don't write a status header. The gate adds one that matches the outcome.
 

@@ -37,12 +37,13 @@ os.environ.update({"TICKET_GATE_STATE_DIR": str(WORK / "gate"), "TICKET_GATE_TOK
                    "TICKET_WORK_ROOT": str(WORK / "tr"), "ACO_DB": str(WORK / "aco.db")})
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(DEMO))
+sys.path.insert(0, str(ROOT / "tests"))
 
 import scenarios as sc  # noqa: E402
 import ticketcore as tc  # noqa: E402
 
 from trueforge_hackathon.agents.ticket_resolver import gate_server as g  # noqa: E402
-from trueforge_hackathon.agents.ticket_resolver.linear import LinearError  # noqa: E402
+from linear_fake import FakeLinear  # noqa: E402
 
 logging.disable(logging.INFO)  # httpx request lines from the MCP client
 failures = 0
@@ -56,56 +57,8 @@ def check(name: str, ok: bool, info=None):
 
 # ---------------------------------------------------------------- fake Linear
 
-GROUPS = {"Agent": ["Working", "Awaiting approval", "Replied", "Declined", "Failed"],
-          "Repro": ["Fixed", "Reproduced, no fix", "Not reproduced"]}
-
-
-class FakeLinear:
-    api_key = FAKE_KEY
-
-    def __init__(self):
-        self.issues: dict[str, dict] = {}
-        self.label_ids = {(None, n): f"lbl-{n}" for n in ("Bug", "Feature", "agent-skip")}
-        for group, names in GROUPS.items():
-            self.label_ids.update({(group, n): f"lbl-{group}-{n}" for n in names})
-        self.posted: list[dict] = []
-
-    def add(self, ident: str, title: str, body: str, labels=("Bug",), team="ZYN"):
-        self.issues[ident] = {
-            "id": f"uuid-{ident}", "identifier": ident, "title": title, "description": body,
-            "url": f"https://linear.app/x/issue/{ident}", "createdAt": "2026-09-26T10:00:00Z",
-            "updatedAt": "2026-09-26T10:00:00Z", "team": {"id": "t", "key": team},
-            "labels": {"nodes": [{"id": self.label_ids[(None, n)], "name": n, "parent": None} for n in labels]},
-            "comments": {"nodes": []},
-        }
-
-    def issue(self, ident: str) -> dict:
-        if ident not in self.issues:
-            raise LinearError(f"issue {ident} not found")
-        return json.loads(json.dumps(self.issues[ident]))  # a fresh copy, like a real fetch
-
-    def labels(self):
-        return self.label_ids
-
-    def set_group_label(self, issue: dict, group: str, name: str):
-        nodes = [n for n in self.issues[issue["identifier"]]["labels"]["nodes"]
-                 if (n.get("parent") or {}).get("name") != group]
-        nodes.append({"id": self.label_ids[(group, name)], "name": name, "parent": {"id": group, "name": group}})
-        self.issues[issue["identifier"]]["labels"]["nodes"] = nodes
-
-    def create_comment(self, issue_id: str, body: str) -> dict:
-        ident = next(k for k, v in self.issues.items() if v["id"] == issue_id)
-        c = {"id": f"c{len(self.posted) + 1}", "body": body, "createdAt": "2026-09-26T11:00:00Z", "user": {"id": "me"}}
-        self.issues[ident]["comments"]["nodes"].append(c)
-        self.posted.append({"issue": ident, **c})
-        return {"id": c["id"], "url": f"https://linear.app/x/issue/{ident}#comment-{c['id']}"}
-
-    def group_label(self, ident: str, group: str) -> str | None:
-        return next((n["name"] for n in self.issues[ident]["labels"]["nodes"]
-                     if (n.get("parent") or {}).get("name") == group), None)
-
-
 fake = FakeLinear()
+fake.api_key = FAKE_KEY
 g.linear = fake
 s1, s2, s3 = sc.scenarios()
 fake.add("ZYN-1", s1["title"], s1["body"])

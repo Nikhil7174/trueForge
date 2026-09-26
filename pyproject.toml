@@ -23,6 +23,8 @@ tf-mcp = "trueforge_hackathon.agents.access_reviewer.mcp_server:main"
 tf-gate = "trueforge_hackathon.agents.migration_rehearsal.gate_server:main"
 tf-gate-seed-demo = "trueforge_hackathon.agents.migration_rehearsal.demo.seed:main"
 tf-ticket-gate = "trueforge_hackathon.agents.ticket_resolver.gate_server:main"
+tf-ticket-trigger = "trueforge_hackathon.agents.ticket_resolver.trigger:main"
+tf-ticket-seed-demo = "trueforge_hackathon.agents.ticket_resolver.demo.seed_linear:main"
 tf-seed = "trueforge_hackathon.cli.seed:main"
 tf-run = "trueforge_hackathon.cli.run:main"
 

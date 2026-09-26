@@ -92,15 +92,38 @@ def pack_source(root: Path, header: dict) -> str:
     return SOURCE_MAGIC + canonical_json(full) + "\n" + base64.b64encode(tar_bytes).decode()
 
 
+def _unwrap(raw: str) -> str:
+    """Harnesses deliver tool results in different wrappers: plain text, {"result": ...}, a JSON list of
+    content parts, or a Python repr like `type='text' text='TICKET-GATE-SOURCE v1 {...}\\n<base64>' ...`."""
+    stripped = raw.lstrip()
+    if stripped[:1] in ("{", "["):
+        try:
+            obj = json.loads(stripped)
+        except json.JSONDecodeError:
+            return raw
+        parts = obj if isinstance(obj, list) else [obj]
+        texts = []
+        for p in parts:
+            if isinstance(p, dict):
+                texts.append(str(p.get("result") or p.get("text") or ""))
+            else:
+                texts.append(str(p))
+        return "\n".join(texts)
+    return raw
+
+
 def read_source_blob(raw: str) -> tuple[dict, bytes]:
-    if raw.lstrip().startswith("{"):  # a harness that wrapped the tool result as JSON
-        obj = json.loads(raw)
-        raw = obj.get("result") or obj.get("text") or ""
-    raw = raw.strip()
-    if not raw.startswith(SOURCE_MAGIC):
+    text = _unwrap(raw)
+    start = text.find(SOURCE_MAGIC)
+    if start < 0:
         raise ValueError(f"not an export_source result (missing '{SOURCE_MAGIC.strip()}' header)")
-    header_line, _, payload = raw.partition("\n")
-    header = json.loads(header_line[len(SOURCE_MAGIC):])
+    try:
+        header, end = json.JSONDecoder().raw_decode(text, start + len(SOURCE_MAGIC))
+    except json.JSONDecodeError as e:
+        raise ValueError(f"export_source header is not valid JSON: {e}") from e
+    rest = text[end:]
+    rest = rest[2:] if rest.startswith("\\n") else rest  # a repr-escaped newline
+    payload = re.match(r"\s*([A-Za-z0-9+/=\s]*)", rest).group(1)
     tar_bytes = base64.b64decode("".join(payload.split()))
     if sha256_bytes(tar_bytes) != header.get("tar_sha256"):
         raise ValueError("source archive sha256 does not match its header (truncated or altered file)")
