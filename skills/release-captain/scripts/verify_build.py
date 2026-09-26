@@ -60,8 +60,14 @@ def clone(repo: str, ref: str) -> Path:
 
 
 def detect_test_command(work: Path) -> str | None:
-    """Pick the project's own test command. Explicit --test-command always wins over this."""
-    if (work / "pyproject.toml").exists() or list(work.glob("tests/*.py")) or list(work.glob("test_*.py")):
+    """Pick the project's own test command. Explicit --test-command always wins over this.
+
+    Only guess pytest when files it would actually collect exist. A `tests/` directory of
+    standalone scripts collects nothing, and pytest then exits 5, which looks like a broken
+    suite rather than the wrong command."""
+    collectable = list(work.glob("test_*.py")) + list(work.glob("*_test.py")) \
+        + list(work.glob("tests/test_*.py")) + list(work.glob("tests/*_test.py"))
+    if collectable:
         return "python3 -m pytest -q"
     if (work / "package.json").exists():
         try:

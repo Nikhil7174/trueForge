@@ -87,6 +87,23 @@ def refuse(reason: str, **extra) -> dict:
     return {"published": False, "refused": True, "reason": reason, **extra}
 
 
+def _github_unreachable(e: github.GitHubError, repo: str) -> dict:
+    """GitHub failing is a finding the agent should report, not an exception it should work around.
+    Say which failure it is, because the fix differs and none of them are 'try again'."""
+    text = str(e)
+    if "401" in text:
+        hint = "GITHUB_TOKEN is missing or invalid. An operator must fix it; you cannot."
+    elif "403" in text and "rate limit" in text.lower():
+        hint = "GitHub rate limit reached. Wait, or use a token with more quota."
+    elif "404" in text:
+        hint = f"{repo} is not visible to this token. Check GITHUB_REPO and the token's repository access."
+    else:
+        hint = "GitHub could not be reached. Report this; do not guess the release contents."
+    return {"failed": True, "repo": repo, "reason": text[:600], "hint": hint,
+            "next": "Report this to the user and stop. Never assemble a release from anything but "
+                    "release_scope's real output."}
+
+
 def audit(verification_id: str, repo: str, tag: str, status: str, detail: Any) -> None:
     with ledger() as db:
         db.execute("INSERT INTO releases (verification_id, repo, tag, status, detail, at) "
@@ -129,13 +146,19 @@ def _latest_tag(repo: str | None) -> Optional[str]:
 
 def _release_scope(from_tag: Optional[str], to_ref: Optional[str]) -> dict:
     repo = github.REPO
-    head = github.head_sha(to_ref or "HEAD", repo)
-    base = from_tag or _latest_tag(repo)
+    try:
+        head = github.head_sha(to_ref or "HEAD", repo)
+        base = from_tag or _latest_tag(repo)
+    except github.GitHubError as e:
+        return _github_unreachable(e, repo)
     if not base:
         return {"repo": repo, "head_sha": head, "from_tag": None, "commits": [], "files": [],
                 "migrations": [], "tags": [],
                 "note": "no tags in this repository yet; pass from_tag to scope a range"}
-    cmp = github.compare(base, head, repo)
+    try:
+        cmp = github.compare(base, head, repo)
+    except github.GitHubError as e:
+        return _github_unreachable(e, repo)
     commits = [{"sha": c["sha"][:12], "message": (c["commit"]["message"] or "").splitlines()[0][:200],
                 "author": (c["commit"].get("author") or {}).get("name")}
                for c in cmp.get("commits", [])]
@@ -150,9 +173,12 @@ def _release_scope(from_tag: Optional[str], to_ref: Optional[str]) -> dict:
             continue  # deleted in this range; nothing to apply
         sha = gatecore.sql_sha256(sql)
         migrations.append({"path": path, "sha256": sha, **migration_state(sha)})
+    try:
+        tags = [t["name"] for t in github.list_tags(repo)][:20]
+    except github.GitHubError:
+        tags = []
     return {"repo": repo, "head_sha": head, "from_tag": base, "commits": commits,
-            "files": files, "migrations": migrations,
-            "tags": [t["name"] for t in github.list_tags(repo)][:20],
+            "files": files, "migrations": migrations, "tags": tags,
             "next": ("Run verify_build.py in the sandbox, then submit_verification. "
                      "publish_release refuses while any migration above is not 'applied'.")}
 
@@ -172,7 +198,10 @@ def _submit_verification(report_json: str) -> dict:
     if report.get("repo") != github.REPO:
         return {"accepted": False,
                 "reason": f"report is for {report.get('repo')!r} but this gate serves {github.REPO!r}"}
-    head_now = github.head_sha(report.get("head_ref") or "HEAD", github.REPO)
+    try:
+        head_now = github.head_sha(report.get("head_ref") or "HEAD", github.REPO)
+    except github.GitHubError as e:
+        return {"accepted": False, **_github_unreachable(e, github.REPO)}
     if report.get("head_sha") != head_now:
         return {"accepted": False,
                 "reason": f"the repository moved on: verified {str(report.get('head_sha'))[:12]}, "
@@ -257,7 +286,11 @@ def _publish_release(verification_id: str, tag: str, target_repo: str, release_s
         audit(verification_id, target_repo, tag, "refused", "head drift")
         return refuse(f"the repository moved on since verification: verified {vf['head_sha'][:12]}, "
                       f"{head_now[:12]} is current. Verify again.")
-    if tag in {t["name"] for t in github.list_tags(target_repo)}:
+    try:
+        existing_tags = {t["name"] for t in github.list_tags(target_repo)}
+    except github.GitHubError as e:
+        return refuse(f"could not list tags, so cannot tell if {tag!r} already exists: {e}")
+    if tag in existing_tags:
         audit(verification_id, target_repo, tag, "refused", "tag exists")
         return refuse(f"tag {tag!r} already exists in {target_repo}")
 
