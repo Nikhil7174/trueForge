@@ -1,7 +1,7 @@
 [project]
 name = "trueforge-hackathon"
 version = "0.1.0"
-description = "Generic TrueForge integration template. Plugins: access-reviewer, migration-rehearsal."
+description = "Generic TrueForge integration template. Plugins: access-reviewer, migration-rehearsal, release-captain."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -18,10 +18,15 @@ migration = [
   "psycopg[binary]>=3.1",
   "pgserver>=0.1.4",
 ]
+# the infra-free unit suite; release-captain's verify_build.py installs this in the sandbox
+dev = [
+  "pytest>=8",
+]
 
 [project.scripts]
 tf-mcp = "trueforge_hackathon.agents.access_reviewer.mcp_server:main"
 tf-gate = "trueforge_hackathon.agents.migration_rehearsal.gate_server:main"
+tf-ship = "trueforge_hackathon.agents.release_captain.ship_gate:main"
 tf-gate-seed-demo = "trueforge_hackathon.agents.migration_rehearsal.demo.seed:main"
 tf-seed = "trueforge_hackathon.cli.seed:main"
 tf-run = "trueforge_hackathon.cli.run:main"

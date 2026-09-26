@@ -130,6 +130,15 @@ async def run(gate: Gate):
     forged["snapshot_id"] = "snap_deadbeef"
     t = await gate.call("submit_rehearsal", report_json=redigest(forged))
     check("report for a snapshot the gate never issued rejected", not t.get("accepted"), t)
+    # rehearse.py refuses a major-version mismatch, but that check runs in the sandbox where an agent
+    # can edit it out. This is the same report with a validly recomputed digest, as a patched
+    # rehearse.py would produce it: the gate must refuse it on its own.
+    wrong_engine = json.loads(json.dumps(r0007))
+    other_major = int(str(header["server_version"]).split(".")[0]) + 1   # any major but production's
+    wrong_engine["engine"] = f"PostgreSQL {other_major}.1 (sandbox)"
+    t = await gate.call("submit_rehearsal", report_json=redigest(wrong_engine))
+    check("rehearsal on a different Postgres major rejected (gate-side, not sandbox-side)",
+          not t.get("accepted") and "major" in t.get("reason", "").lower(), t)
 
     print("\n3. the fix: v2 is SAFE, and apply guards hold")
     v2_path = MIG / "0007_enforce_unique_mbi_v2.sql"
