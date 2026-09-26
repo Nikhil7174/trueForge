@@ -121,6 +121,23 @@ def _seed() -> list[Principal]:
 _principals = _seed()
 
 
+def use_aws() -> bool:
+    return bool(os.environ.get("AWS_ACCESS_KEY_ID") or os.environ.get("AWS_PROFILE"))
+
+
+def demo_revoke_principal() -> str:
+    return os.environ.get("DEMO_REVOKE_PRINCIPAL", "tf-hackathon-throwaway").strip()
+
+
+def review_only_principals() -> list[str]:
+    raw = os.environ.get("ACCESS_REVIEWER_ONLY_PRINCIPALS", "").strip()
+    return [part.strip() for part in raw.split(",") if part.strip()]
+
+
+def backend_name() -> str:
+    return "aws" if use_aws() else "fixture"
+
+
 def unused_after_days() -> int:
     try:
         return int(os.environ.get("UNUSED_AFTER_DAYS", "90"))
@@ -150,6 +167,10 @@ def is_denied_principal(name: str) -> bool:
 
 
 def list_principals() -> list[dict]:
+    if use_aws():
+        from trueforge_hackathon.agents.access_reviewer.aws_iam import list_principals as aws_list
+
+        return aws_list()
     return [
         {
             "id": p.id,
@@ -163,10 +184,18 @@ def list_principals() -> list[dict]:
 
 
 def get_principal(name_or_id: str) -> Principal | None:
+    if use_aws():
+        from trueforge_hackathon.agents.access_reviewer.aws_iam import get_principal as aws_get
+
+        return aws_get(name_or_id)
     return next((p for p in _principals if p.name == name_or_id or p.id == name_or_id), None)
 
 
 def revoke_access(principal_name: str, policy_name: str) -> dict:
+    if use_aws():
+        from trueforge_hackathon.agents.access_reviewer.aws_iam import revoke_access as aws_revoke
+
+        return aws_revoke(principal_name, policy_name)
     principal = get_principal(principal_name)
     if principal is None:
         return {"ok": False, "error": f"Unknown principal: {principal_name}"}

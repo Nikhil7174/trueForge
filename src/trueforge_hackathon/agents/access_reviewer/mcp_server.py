@@ -9,14 +9,18 @@ from mcp_types import ToolAnnotations
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from trueforge_hackathon.env import load_env_file
 from trueforge_hackathon.agents.access_reviewer.store import (
+    backend_name,
     deny_prefixes,
+    demo_revoke_principal,
     get_principal,
     is_denied_principal,
     is_unused,
     list_principals,
     revoke_access,
     unused_after_days,
+    use_aws,
 )
 
 mcp = MCPServer(
@@ -31,7 +35,17 @@ def _dump(payload: Any) -> str:
 
 @mcp.custom_route("/health", methods=["GET"])
 async def health(_request: Request) -> JSONResponse:
-    return JSONResponse({"ok": True, "mcp": "access-reviewer-iam"})
+    payload: dict[str, Any] = {
+        "ok": True,
+        "mcp": "access-reviewer-iam",
+        "backend": backend_name(),
+        "demoRevokePrincipal": demo_revoke_principal() if use_aws() else None,
+    }
+    if use_aws():
+        from trueforge_hackathon.agents.access_reviewer.aws_iam import account_id
+
+        payload["account"] = account_id()
+    return JSONResponse(payload)
 
 
 @mcp.tool(
@@ -45,10 +59,17 @@ async def health(_request: Request) -> JSONResponse:
     ),
 )
 def list_principals_tool() -> str:
+    account: Any = "fixture"
+    if use_aws():
+        from trueforge_hackathon.agents.access_reviewer.aws_iam import account_id
+
+        account = account_id()
     return _dump(
         {
-            "account": "fixture",
+            "account": account,
+            "backend": backend_name(),
             "denyPrincipalPrefixes": deny_prefixes(),
+            "demoRevokePrincipal": demo_revoke_principal() if use_aws() else None,
             "principals": list_principals(),
         }
     )
@@ -101,7 +122,16 @@ def get_principal_policies(principal: str) -> str:
 )
 def get_access_last_used(principal: str | None = None) -> str:
     window = unused_after_days()
-    targets = [get_principal(principal)] if principal else [get_principal(row["name"]) for row in list_principals()]
+    if principal:
+        targets = [get_principal(principal)]
+    else:
+        # Unscoped last-used is users only. Roles are fetched when named.
+        # Access Advisor is a job per principal and is too slow for every role.
+        targets = [
+            get_principal(row["name"])
+            for row in list_principals()
+            if row.get("kind") == "user"
+        ]
     rows: list[dict[str, Any]] = []
     for found in targets:
         if found is None:
@@ -157,10 +187,14 @@ def revoke_access_tool(principal: str, policy: str) -> str:
 
 
 def main() -> None:
+    load_env_file()
     host = os.environ.get("ACCESS_REVIEWER_MCP_HOST", "127.0.0.1")
     port = int(os.environ.get("ACCESS_REVIEWER_MCP_PORT", "8765"))
     print(f"access-reviewer MCP listening on http://{host}:{port}/mcp")
+    print(f"backend: {backend_name()}")
     print(f"deny prefixes: {', '.join(deny_prefixes())}")
+    if use_aws():
+        print(f"demo revoke principal: {demo_revoke_principal()}")
     mcp.run(transport="streamable-http", host=host, port=port, stateless_http=True, streamable_http_path="/mcp")
 
 

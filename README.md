@@ -58,7 +58,8 @@ Do not rebuild these: agent loop, MCP routing, sandbox-as-a-tool, Code Mode, com
 ## Prerequisites
 
 - Python 3.12+
-- Node.js 22.14+ only for the TrueForge server: `npx @truefoundry/trueforge` → [http://localhost:8790](http://localhost:8790)
+- Node.js 22.14+ only for the TrueForge server. Allow the local MCP host, then start it:
+  `OUTBOUND_URL_ALLOWED_HOSTS='["localhost","127.0.0.1"]' npx @truefoundry/trueforge` → [http://localhost:8790](http://localhost:8790)
 - A model provider configured in TrueForge **Settings → Models**
 - Daytona sandbox — **required for this demo**. Skills and Code Mode load `SKILL.md` in the sandbox; without Daytona the playbook never attaches.
 - A public GitHub/GitLab clone of **this** repo. TrueForge fetches `skills/` from that URL (see order below).
@@ -69,10 +70,13 @@ Do not rebuild these: agent loop, MCP routing, sandbox-as-a-tool, Code Mode, com
 cd trueforge-hackathon
 cp .env.example .env
 # set TRUEFORGE_MODEL
+# optional live AWS: AWS_PROFILE=default AWS_REGION=us-west-2 DEMO_REVOKE_PRINCIPAL=tf-hackathon-throwaway
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .              # add '.[migration]' for the migration-rehearsal plugin
 ```
+
+With `AWS_PROFILE` or `AWS_ACCESS_KEY_ID` set, the same four tools read real IAM. `revoke_access` can detach a policy only from `DEMO_REVOKE_PRINCIPAL` (default `tf-hackathon-throwaway`). Create that user, attach an unused managed policy, and do not give it access keys. Without AWS vars the in-memory fixture is used.
 
 Skills need a public git URL before seed can attach them. Do this in order:
 
@@ -85,7 +89,7 @@ Without `SKILL_GIT_URL`, seed still creates the agent and instructions cover the
 `tf-mcp` is a long-running server. Leave it up in **one terminal**, then run seed and run in a **second terminal**:
 
 ```bash
-# terminal 1 — IAM fixture MCP; leave this running
+# terminal 1 — IAM MCP (fixture or live AWS); leave this running
 tf-mcp
 
 # terminal 2 — register connectors, skills, and the named agent
@@ -99,7 +103,7 @@ Same commands as a module: `python -m trueforge_hackathon mcp|gate|seed|run`.
 
 The migration-rehearsal plugin uses its own MCP (`tf-gate`) and a demo Postgres. See [docs/migration-rehearsal.md](docs/migration-rehearsal.md).
 
-Try: `Review unused IAM access. Show blast radius. Do not revoke yet.` Then: `Revoke AmazonS3FullAccess from ci-bot.`
+Try: `Review unused IAM access. Show blast radius. Do not revoke yet.` Then, on the fixture: `Revoke AmazonS3FullAccess from ci-bot.` On live AWS: `Revoke AmazonS3ReadOnlyAccess from tf-hackathon-throwaway.`
 
 The second prompt should pause on `revoke_access`. In the UI, Allow or Deny. From the CLI:
 

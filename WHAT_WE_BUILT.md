@@ -1,6 +1,6 @@
 # What we had to do, and what is in this repo
 
-This is the design-and-implementation record for the TrueFoundry × Polaris hackathon project **Agents That Act**, living in `/Users/nikhilkumarsingh/trueforge-hackathon` (sibling of `zynix`, not part of it).
+This is the design-and-implementation record for the TrueFoundry × Polaris hackathon project **Agents That Act**.
 
 Official brief: [truefoundry.com/truefoundry-hackathon#build](https://www.truefoundry.com/truefoundry-hackathon#build).  
 TrueForge docs: [trueforge.dev/introduction](https://trueforge.dev/introduction).
@@ -38,8 +38,6 @@ It does **not** come with IAM “list unused access / detach policy.” The [MCP
 - **Policy in the MCP** (deny break-glass), not a hope the model is careful.
 - Seed + run so someone else can clone and operate it.
 - Use TrueForge UI; do not write a second chat product.
-
-Zynix was **design reference only** (plugin registry, policy at the trust boundary). No Zynix code, PHI, or prod keys.
 
 ---
 
@@ -201,7 +199,7 @@ Operator  →  TrueForge UI or tf-run
 ### Intentionally not built
 
 - Custom agent loop, tool router, or “MCP gateway” in front of TrueForge
-- Zynix / healthcare / Service Bus / GraphQL
+- Healthcare / Service Bus / GraphQL
 - Secrets in git
 - A second chat UI
 - A Node copy of the adapter / MCP / seed (TrueForge server itself remains `npx`)
