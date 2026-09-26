@@ -25,6 +25,7 @@ aws = [
 
 [project.scripts]
 tf-mcp = "trueforge_hackathon.agents.access_reviewer.mcp_server:main"
+tf-cost-mcp = "trueforge_hackathon.agents.cost_janitor.mcp_server:main"
 tf-gate = "trueforge_hackathon.agents.migration_rehearsal.gate_server:main"
 tf-gate-seed-demo = "trueforge_hackathon.agents.migration_rehearsal.demo.seed:main"
 tf-seed = "trueforge_hackathon.cli.seed:main"
