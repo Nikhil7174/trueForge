@@ -111,8 +111,8 @@ You can also chat with **Agents → platform-guardian** directly in the UI, with
   - Prices are fetched live; none are hardcoded.
   - The sandbox is a real Daytona sandbox.
 - **Staged:** the AWS resources themselves. `infra/seed.py` creates the "platform team" environment: waste volumes, an idle IP, a `env=prod` volume that must be refused, and two over-privileged roles it assumes once so the telemetry is genuine. The resource IDs are tracked in a gitignored state file, not in tags.
-- **Fixture:** `IAM_BACKEND=fixture` keeps the original in-memory IAM data, for tests only. The demo uses `aws`.
-- **Built but off:** a GitHub issues audit trail (`src/trueforge_hackathon/integrations/github_audit.py`). It's enabled by setting `GITHUB_PAT` and `AUDIT_REPO`, and was skipped at the owner's request.
+- **Fixture:** `IAM_BACKEND=fixture` keeps in-memory IAM data for tests. platform-guardian runs on `aws`.
+- **Optional:** a GitHub issues audit trail for the AWS jobs (`src/trueforge_hackathon/integrations/github_audit.py`), enabled by setting `GITHUB_PAT` and `AUDIT_REPO`.
 
 **Known limits:**
 - IAM service-last-accessed lags up to about 4 hours and CloudTrail by minutes. Because the staged roles are new, the agent often concludes "insufficient evidence, no revocation", which is intended.
@@ -131,7 +131,7 @@ Generic TrueForge integration: **one adapter, many agent plugins**. Everything b
 
 The integration is **Python**. The TrueForge server and UI stay Node (`npx @truefoundry/trueforge`).
 
-For what the hackathon required, what we built first, and what is still stubbed, see [WHAT_WE_BUILT.md](WHAT_WE_BUILT.md).
+For the original design record, see [WHAT_WE_BUILT.md](WHAT_WE_BUILT.md).
 
 ```text
 infra/                                       # seed / teardown / doctor for the live AWS environment
@@ -255,26 +255,26 @@ tf-run --agent access-reviewer --approve allow --session <session-id> --message 
 4. `register_plugin(...)` in `src/trueforge_hackathon/__init__.py`.
 5. Ship **one** finished job before starting a second.
 
-## Demo script (5 minutes)
+## Demo script
 
-1. Job: find unused IAM access; revoke nothing alone.
-2. **Reach:** `list_principals` / `get_access_last_used`.
-3. **Skill + sandbox:** playbook loaded from `skills/`; Code Mode builds the unused table.
-4. Freeze on `revoke_access` with a blast-radius card. Allow.
-5. Confirm the policy is gone with `get_principal_policies`.
-6. Sessions: tool calls, skill, sandbox, approval event.
+1. **File a ticket** in Linear with a routing label, e.g. `cloudcost`: *Clean up unattached EBS volumes and idle IPs in us-west-2*. It moves to `Working`.
+2. **Reach:** platform-guardian reads live AWS (volumes, IPs, CloudTrail, live prices). The `env=prod` volume shows as protected.
+3. **Run what it writes:** the cost math runs in the Daytona sandbox. FindingsTable and CostTable cards render in the chat.
+4. **Ask:** one scope question, with a Recommended option and its reason. The ticket shows `Awaiting approval`.
+5. **Stop:** a PreApproval card, then the native approval for each deletion. Allow or Deny.
+6. **Close the loop:** the Outcome card shows verified savings, the result is posted to the ticket, and the full trace is in Sessions.
 
 ## Judging map
 
-| Requirement | This template |
+| Requirement | platform-guardian |
 |---|---|
-| Reach something real | MCP to IAM fixture (swap in live AWS behind `AWS_*`) |
-| Run what it writes | Sandbox / Code Mode + skill pack cloned into the sandbox |
-| Know when to stop | `revoke_access` + `blast-radius` skill + named approval |
+| Reach something real | MCP to live AWS (EC2/EBS, IAM, CloudTrail, Price List), Postgres, GitHub and Linear |
+| Run what it writes | Daytona sandbox: cost math, IAM policy synthesis and lint, migration rehearsal, build verification, bug repros |
+| Know when to stop | Every destructive tool is gated by its exact name, with policy enforced in the MCP servers and a PreApproval card before each gate |
 
 `release-captain` goes one step further: `publish_release` refuses while a migration in the release
 is unapplied, so passing tests are not enough to ship. That rule lives in the gate, not the prompt.
 
-Do not put keys in git. Disclose AI assistants in this README when you submit.
+Keys never go in git: `.env` is gitignored, and connector credentials live in TrueForge Settings.
 
 **AI assistants used while building:** Cursor; Claude (Anthropic) for the migration-rehearsal plugin; Claude Code (Anthropic) for the platform-guardian work (infra, cost-janitor, IAM AWS backend, umbrella agent, label-routed Linear trigger, skills, docs).
