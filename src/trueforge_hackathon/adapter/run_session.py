@@ -57,13 +57,13 @@ def _message_content(content: Any) -> str | None:
     return None
 
 
-def create_agent_session(client: TrueForge, agent: dict[str, Any]) -> str:
+def create_agent_session(client: TrueForge, agent: dict[str, Any], metadata: dict[str, str] | None = None) -> str:
     payload: Any
     if "name" in agent:
         payload = SessionAgentNameRef(name=agent["name"])
     else:
         payload = agent
-    session = client.sessions.create(agent=payload)
+    session = client.sessions.create(agent=payload, **({"metadata": metadata} if metadata else {}))
     return session.data.id
 
 

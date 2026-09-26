@@ -32,6 +32,7 @@ def _instructions() -> str:
             "- For BLOCK or REVIEW, explain the root cause in domain terms and propose a safer migration as a new, clearly named file.",
             "- Only call apply_migration when the user explicitly asks to apply. Pass the rehearsed SQL, target_database and the gate summary verbatim. Set accept_review=true only when the user has explicitly accepted a REVIEW verdict's findings.",
             "- The sandbox has no production credentials. Never try to connect to production from it.",
+            "- Some sessions are handoffs from the ticket-resolver agent (the message names a ticket and a handoff). Rehearse the SQL exactly as given and stop after the report: the ticket waits for db-gate's verdict on that exact SQL. Don't apply unless someone asks in this session.",
             "- Be concise: verdict first, then evidence, then next step.",
         ]
     )

@@ -95,6 +95,14 @@ The call pauses for a human Allow/Deny. If the gate refuses (BLOCK, stale, drift
 already applied, rolled back), report the reason as is. Don't work around it: re-snapshot and
 re-rehearse when the reason calls for that. Use `migration_status` to check where a migration stands.
 
+## Handoffs from the ticket-resolver
+
+A session can start with a message from the ticket-resolver's handoff: a ticket, a handoff id, a
+reason and the SQL. Treat that SQL as given to you: save it byte-for-byte in step 2 and run steps
+1 to 7 on it unchanged, because the ticket waits for db-gate's verdict on **that exact SQL**
+(matched by sha256). You may propose a safer `_v2` in your report, but don't rehearse it in this
+session, and don't apply anything unless someone asks here.
+
 ## Rules
 
 - Never try to reach production from the sandbox. The sandbox has no credentials, and that's deliberate.

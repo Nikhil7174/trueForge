@@ -301,8 +301,9 @@ async def mcp_checks(url: str):
         async with ClientSession(rd, wr) as s:
             await s.initialize()
             tools = {t.name: t for t in (await s.list_tools()).tools}
-            check("server lists the six tools", set(tools) == {"export_source", "submit_attempt", "propose_reply",
-                                                               "reply_to_customer", "record_decline", "ticket_status"},
+            check("server lists the seven tools", set(tools) == {"export_source", "submit_attempt", "request_migration",
+                                                                 "propose_reply", "reply_to_customer", "record_decline",
+                                                                 "ticket_status"},
                   sorted(tools))
             rt = tools.get("reply_to_customer")
             check("reply_to_customer is marked destructive", rt is not None and rt.annotations.destructive_hint is True)

@@ -2,13 +2,12 @@
 
 One TrueForge agent, **platform-guardian**, does five jobs a platform team rarely has time for. Every task starts as a **Linear ticket**; its **label** picks the job. Every irreversible step pauses on TrueForge's native approval.
 
-| Linear label | Job (plugin) | What it does | Gate (literal tool names) | Built by |
-|---|---|---|---|---|
-| `cloudcost` | **cost-janitor** | Finds AWS waste (unattached EBS, idle Elastic IPs, orphaned snapshots, stopped instances), proves it with evidence, prices it live, backs it up, deletes only per-resource with approval | `delete_volume`, `release_elastic_ip`, `delete_snapshot`, `terminate_instance` | Sai |
-| `iam-review` | **access-reviewer** | IAM least privilege. `IAM_BACKEND=aws`: CloudTrail + last-accessed evidence, subagents, sandbox policy synthesis and lint. `advisor`: Access Advisor review. `fixture`: tests | `revoke_access`, `detach_role_policy`, `put_role_policy` | Nikhil (template, fixture, advisor) · Sai (aws backend) |
-| `migration` | **migration-rehearsal** | Restores prod into the sandbox, runs the migration, diffs every row, SAFE / REVIEW / BLOCK verdict ([docs](docs/migration-rehearsal.md)) | `apply_migration` | Nikhil |
-| `release` | **release-captain** | Scopes a release, verifies the build in the sandbox, drafts notes, refuses to publish while a migration is unapplied ([docs](docs/release-captain.md)) | `publish_release` | Nikhil |
-| `Bug` | **ticket-resolver** | Reproduces a bug ticket against the product code in the sandbox, proves any fix, replies to the customer only through the gate | `reply_to_customer` | Nikhil |
+| Plugin | Job | Gate |
+|---|---|---|
+| **access-reviewer** | Official starter #05: reach IAM, find unused access | `revoke_access` |
+| **migration-rehearsal** | Restore prod into a sandbox, run a Postgres migration there, diff every row, report a SAFE / REVIEW / BLOCK verdict. Setup and demo: [docs/migration-rehearsal.md](docs/migration-rehearsal.md) | `apply_migration` |
+| **release-captain** | Read the commits since the last tag, run the tests in a sandbox, draft release notes - and refuse to publish while any migration in the release is unapplied. Setup and demo: [docs/release-captain.md](docs/release-captain.md) | `publish_release` |
+| **ticket-resolver** | Reproduce a Linear bug ticket in a sandbox, prove any fix, and reply only after approval. Data corrections are handed, in order, to migration-rehearsal and the reply waits for db-gate's verdict: [docs/ticket-migration-handoff.md](docs/ticket-migration-handoff.md) | `reply_to_customer` |
 
 Shared by all jobs: the **umbrella plugin** that merges the five into one agent, the **single Linear trigger** that routes by label, the **`aws-hygiene-ui` card contract** (Generative UI), and the `infra/` AWS scripts (Sai). The adapter, plugin registry, skill catalog and `tf-seed` come from Nikhil's original template.
 
@@ -157,6 +156,7 @@ tests/migration_rehearsal_e2e.py             # 28 guard checks against db-gate, 
 tests/release_captain_e2e.py                 # 27 guard checks against ship-gate, no GitHub needed
 docs/migration-rehearsal.md                  # migration-rehearsal setup + demo script
 docs/release-captain.md                      # release-captain setup + demo script
+docs/ticket-migration-handoff.md             # ticket-resolver → migration-rehearsal serial handoff
 ```
 
 ## Skills vs agents

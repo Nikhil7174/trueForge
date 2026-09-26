@@ -5,11 +5,15 @@ migration=migration-rehearsal, release=release-captain). Status goes back on the
 group (Working, Awaiting approval, Replied, Declined, Failed). Bug tickets keep the ticket-gate flow unchanged.
 
   tf-ticket-trigger                          serve: webhook endpoint + poll backstop (TRIGGER_MODE=both)
+                                             + the migration handoff worker (see handoff.py)
+  tf-ticket-trigger handoffs                 only the handoff worker, for tickets started by hand in the UI
   tf-ticket-trigger register-webhook <url>   create/update the Linear webhook, e.g. https://<tunnel>/linear/webhook
 
 A ticket qualifies when it is in team LINEAR_TEAM_KEY, has label LINEAR_TRIGGER_LABEL and not TICKET_SKIP_LABEL,
 either on creation or when the label is added later. Each ticket starts at most one session (ledger dedupe).
 The session runs until it finishes or pauses on reply_to_customer; a person approves in the TrueForge UI.
+If the ticket needs a database correction, the session ends after request_migration instead; the handoff worker
+then runs the migration-rehearsal agent and resumes the same ticket session with db-gate's verdict.
 
 Config (env or ./.env): LINEAR_API_KEY, LINEAR_WEBHOOK_SECRET, TRIGGER_MODE (both|webhook|poll),
 TRIGGER_POLL_SECONDS (60), TRIGGER_MAX_CONCURRENT (2), TICKET_TRIGGER_HOST, TICKET_TRIGGER_PORT (8822).
@@ -34,6 +38,7 @@ from trueforge_hackathon.adapter.client import create_trueforge_client  # noqa: 
 from trueforge_hackathon.adapter.run_session import create_agent_session, pending_actions, run_agent_message  # noqa: E402
 from trueforge_hackathon.agents.umbrella.plugin import umbrella_agent_name  # noqa: E402
 from trueforge_hackathon.agents.ticket_resolver import gate_server as gate  # noqa: E402
+from trueforge_hackathon.agents.ticket_resolver import handoff  # noqa: E402
 from trueforge_hackathon.agents.ticket_resolver.linear import LinearError  # noqa: E402
 
 # One platform agent; the label picks the job inside it.
@@ -110,75 +115,10 @@ def route_problem(issue: dict) -> str | None:
 
 
 def message_for(issue: dict) -> str:
-    label, job = route_for(issue) or (gate.TRIGGER_LABEL, BUG_JOB)
-    if job == BUG_JOB:
-        return (f"Resolve {issue['identifier']}. This session was started automatically by the trigger because the "
-                f"ticket was filed with the {gate.TRIGGER_LABEL} label. Do the {BUG_JOB} job: run the whole job "
-                "and finish by calling reply_to_customer, so a person can approve or deny the reply.")
-    return (f"Linear ticket {issue['identifier']} was labelled '{label}', so do the {job} job for it.\n\n"
-            f"Title: {issue['title']}\n\n{issue.get('description') or ''}\n\n"
-            "Questions and approvals are answered by a person in this TrueForge session. "
-            "End with a short summary of the outcome; it is posted back to the ticket.")
-
-
-def _jobs_path():
-    return gate.STATE_DIR / "trigger_jobs.json"
-
-
-def _jobs() -> dict:
-    path = _jobs_path()
-    return json.loads(path.read_text()) if path.exists() else {}
-
-
-def _remember(ident: str, **fields) -> None:
-    jobs = _jobs()
-    jobs.setdefault(ident, {}).update(fields)
-    _jobs_path().parent.mkdir(parents=True, exist_ok=True)
-    _jobs_path().write_text(json.dumps(jobs, indent=2))
-
-
-def _last_output(client, session_id: str) -> str:
-    for turn in sorted(client.sessions.list_turns(session_id=session_id, limit=25),
-                       key=lambda t: str(getattr(t, "created_at", "")), reverse=True):
-        content = getattr(getattr(getattr(turn, "state", None), "output", None), "content", None)
-        if content:
-            return content if isinstance(content, str) else str(content)
-    return "(no final text)"
-
-
-def report_back(issue: dict, session_id: str, client) -> str:
-    """Non-Bug jobs: mirror the session state onto the ticket (comment + Agent label). Returns the new status."""
-    approvals, questions = pending_actions(client, session_id)
-    if approvals or questions:
-        lines = [f"**{AGENT_NAME} is waiting for you** in TrueForge session `{session_id}` ({UI_URL}):"]
-        for q in questions:
-            lines.append(f"- Question: {q.question}")
-            lines += [f"  - {o}" for o in q.options]
-        lines += [f"- Approval: `{a.tool_name}` {a.arguments[:400]}" for a in approvals]
-        linear.create_comment(issue["id"], "\n".join(lines))
-        gate.set_label(issue, gate.AGENT_GROUP, "Awaiting approval")
-        return "awaiting_approval" if approvals else "awaiting_answer"
-    output = _last_output(client, session_id)
-    declined = any(w in output.lower() for w in ("denied", "declined"))
-    linear.create_comment(issue["id"], f"**{AGENT_NAME} finished.**\n\n{output[:60000]}\n\nSession `{session_id}`")
-    gate.set_label(issue, gate.AGENT_GROUP, "Declined" if declined else "Replied")
-    return "declined" if declined else "finished"
-
-
-def followup_once() -> None:
-    """Paused non-Bug sessions: once the person has answered in TrueForge, post the outcome to the ticket."""
-    client = None
-    for ident, job in _jobs().items():
-        if job.get("job") == BUG_JOB or job.get("status") not in ("awaiting_approval", "awaiting_answer"):
-            continue
-        client = client or create_trueforge_client()
-        approvals, questions = pending_actions(client, job["session_id"])
-        if approvals or questions:
-            continue
-        status = report_back(linear.issue(ident), job["session_id"], client)
-        _remember(ident, status=status)
-        set_status(ident, status)
-        log(f"{ident}: {status} (after the person answered in TrueForge)")
+    return (f"Resolve {issue['identifier']}. This session was started automatically by the trigger because the "
+            f"ticket was filed with the {gate.TRIGGER_LABEL} label. Run the whole job and finish by calling "
+            "reply_to_customer, so a person can approve or deny the reply. If the fix is a database correction, "
+            "call request_migration instead and end your turn: you'll be resumed with the rehearsal verdict.")
 
 
 def run_session(issue: dict):
@@ -187,7 +127,7 @@ def run_session(issue: dict):
     with _slots:
         try:
             client = create_trueforge_client()
-            session_id = create_agent_session(client, {"name": AGENT_NAME})
+            session_id = create_agent_session(client, {"name": AGENT_NAME}, metadata={"ticket": ident})
             set_status(ident, "running", session_id)
             _remember(ident, job=job, session_id=session_id, status="running")
             log(f"{ident}: {job} session {session_id} started on {AGENT_NAME} ({UI_URL})")
@@ -217,9 +157,20 @@ def run_session(issue: dict):
     elif result.pending_questions:
         set_status(ident, "awaiting_answer", detail=result.pending_questions[0].question[:500])
         log(f"{ident}: the agent asked a question; answer it in session {session_id}")
+    elif queued_handoff(ident):
+        set_status(ident, "handed_off", detail=queued_handoff(ident))
+        log(f"{ident}: handed a migration to migration-rehearsal ({queued_handoff(ident)}); "
+            "the ticket session resumes with its verdict")
     else:
         set_status(ident, "finished", detail=result.status)
         log(f"{ident}: session finished ({result.status}) without asking to reply")
+
+
+def queued_handoff(ident: str) -> str | None:
+    with gate.ledger() as db:
+        row = db.execute("SELECT handoff_id FROM handoffs WHERE issue = ? AND status IN ('queued', 'rehearsing') "
+                         "ORDER BY requested_at DESC LIMIT 1", (ident,)).fetchone()
+    return row["handoff_id"] if row else None
 
 
 def dispatch(issue_ref: str, source: str) -> str:
@@ -302,8 +253,11 @@ def make_app():
         with gate.ledger() as db:
             rows = [dict(r) for r in db.execute(
                 "SELECT issue, status, session_id, updated_at FROM triggered_issues ORDER BY triggered_at DESC LIMIT 20")]
-        return JSONResponse({"ok": True, "mode": MODE, "team": gate.TEAM_KEY, "routes": ROUTES,
-                             "recent": rows})
+            handoffs = [dict(r) for r in db.execute(
+                "SELECT handoff_id, issue, migration_name, status, verdict, ticket_session_id, rehearsal_session_id, "
+                "updated_at FROM handoffs ORDER BY requested_at DESC LIMIT 20")]
+        return JSONResponse({"ok": True, "mode": MODE, "team": gate.TEAM_KEY, "label": gate.TRIGGER_LABEL,
+                             "recent": rows, "handoffs": handoffs})
 
     return Starlette(routes=[Route("/linear/webhook", webhook, methods=["POST"]), Route("/healthz", healthz)])
 
@@ -394,6 +348,7 @@ def serve():
         sys.exit("TRIGGER_MODE must be both, webhook or poll")
     if MODE in ("both", "webhook") and not WEBHOOK_SECRET:
         sys.exit("tf-ticket-trigger: LINEAR_WEBHOOK_SECRET is not set; set it or use TRIGGER_MODE=poll")
+    threading.Thread(target=handoff.work_forever, name="handoffs", daemon=True).start()
     if MODE in ("both", "poll"):
         threading.Thread(target=poll_forever, name="poll", daemon=True).start()
     if MODE == "poll":
@@ -408,12 +363,15 @@ def serve():
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Start platform-guardian sessions for routed Linear tickets.")
     sub = parser.add_subparsers(dest="command")
-    sub.add_parser("serve", help="webhook endpoint + poll backstop (default)")
+    sub.add_parser("serve", help="webhook endpoint + poll backstop + handoff worker (default)")
+    sub.add_parser("handoffs", help="only the ticket -> migration-rehearsal handoff worker")
     reg = sub.add_parser("register-webhook", help="create or update the Linear webhook")
     reg.add_argument("url", help="public URL ending in /linear/webhook")
     args = parser.parse_args(argv)
     if args.command == "register-webhook":
         register_webhook(args.url)
+    elif args.command == "handoffs":
+        handoff.work_forever()
     else:
         serve()
 
