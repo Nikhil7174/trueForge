@@ -151,7 +151,9 @@ def report_back(issue: dict, session_id: str, client) -> str:
     approvals, questions = pending_actions(client, session_id)
     if approvals or questions:
         lines = [f"**{AGENT_NAME} is waiting for you** in TrueForge session `{session_id}` ({UI_URL}):"]
-        lines += [f"- Question: {q.question}" for q in questions]
+        for q in questions:
+            lines.append(f"- Question: {q.question}")
+            lines += [f"  - {o}" for o in q.options]
         lines += [f"- Approval: `{a.tool_name}` {a.arguments[:400]}" for a in approvals]
         linear.create_comment(issue["id"], "\n".join(lines))
         gate.set_label(issue, gate.AGENT_GROUP, "Awaiting approval")
