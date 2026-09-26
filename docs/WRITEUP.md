@@ -1,35 +1,32 @@
-# platform-guardian: an AWS hygiene agent that knows when to stop
+# Platform Guardian: one agent for a platform team's risky chores
 
-**Problem.** AWS accounts slowly fill with waste (unattached volumes, idle IPs, stale snapshots) and with roles holding far more access than they use. Cleanup is tedious and mistakes are irreversible, so it rarely happens. We delegate it to an agent that gathers evidence, does the arithmetic, and asks before every irreversible step.
+**Problem.** Platform teams put off work that is tedious and irreversible when it goes wrong: cleaning up AWS waste, trimming IAM access, applying database migrations, cutting releases and resolving bug tickets. Platform Guardian takes these jobs on. It gathers evidence, does the work in a sandbox, and stops for a human before anything irreversible.
 
-**What it reaches.** A live AWS account, through two narrow MCP servers built in this repo:
-- EC2/EBS, CloudTrail and live Price List prices.
-- IAM policies, service-last-accessed data and CloudTrail sessions.
+**How it works.** Every task starts as a Linear ticket, and its label picks the job: `cloudcost`, `iam-review`, `migration`, `release` or `Bug`. One trigger starts a session on the single platform-guardian agent and reports back on the ticket through labels: Working, Awaiting approval, Replied or Declined.
 
-There is no generic `call_aws` tool, so each tool name is a clear approval boundary.
+**What it reaches.** Five narrow MCP servers built in this repo:
+- AWS EC2/EBS, with CloudTrail and live Price List prices
+- AWS IAM, with CloudTrail
+- Production Postgres (db-gate)
+- GitHub (ship-gate)
+- Linear and the product code (ticket-gate)
 
-**Where it stops.** All seven destructive tools are listed by exact name for TrueForge's native approval. Their arguments describe the blast radius (size, cost, backup, rollback), so the approval prompt shows it. The MCP also enforces policy in code:
-- It refuses prod-tagged or protected resources.
-- It re-reads live state and refuses on drift.
-- It requires a completed backup before deleting a volume.
-- It lints IAM policies for wildcards, privilege escalation and any expansion of access.
+There is no generic "call anything" tool, so every tool name is a clear approval boundary.
 
-When the operator denies a call, the agent acknowledges the reason and changes nothing else.
+**Where it stops.** Every destructive tool is gated by exact name on TrueForge's native approval: delete volume, detach or replace IAM policy, apply migration, publish release, reply to customer. Tool arguments describe the blast radius. The servers also enforce policy in code: they refuse prod-tagged resources, refuse when live state has drifted, require backups, lint IAM policies, and block any release whose migrations are unapplied.
 
-**Architecture and use of TrueForge.**
-- One umbrella agent merges two plugins.
-- Git-backed skills hold the playbooks, waste rules and a shared OpenUI card contract.
-- Subagents gather IAM evidence per role.
-- The Daytona sandbox runs the cost math and policy synthesis, with no credentials.
-- Questions follow a contract: one recommended option with a reason, and a re-ask after free text.
+**TrueForge features used.**
+- Remote MCP connectors, plus the catalog Linear connector
+- Native approvals
+- Daytona sandbox: cost math, policy synthesis, migration rehearsal, build checks, bug reproduction
+- Git-backed skills
+- Dynamic subagents for per-role evidence
+- Generative UI with a fixed card contract
+- `ask_user_question` with one recommended option
+- The sessions SDK, for reproducible registration
 
 **Real vs staged.**
-- **Real:** every AWS call, price, deletion and approval.
-- **Staged:** the resources. `infra/seed.py` creates a believable environment and exercises the IAM roles so their telemetry is genuine; `make teardown` removes it.
-- **Fixture:** the IAM backend remains for tests only.
+- **Real:** every call, price, deletion and approval.
+- **Staged:** the AWS resources are seeded by `infra/seed.py`, and the claims database and product code are synthetic.
 
-**Known limits.**
-- IAM telemetry lags up to about 4 hours, so new roles correctly yield "insufficient evidence, no revocation".
-- It depends on Daytona.
-- It uses stock OpenUI components only.
-- It covers one region per run.
+**Limits.** IAM telemetry lags by hours, so new roles get "insufficient evidence". The agent needs Daytona, and the UI uses stock OpenUI components only.
