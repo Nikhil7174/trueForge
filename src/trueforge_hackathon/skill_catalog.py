@@ -26,6 +26,14 @@ SKILL_CATALOG: list[SkillRef] = [
         ),
         "path": "skills/migration-rehearsal",
     },
+    {
+        "name": "ticket-resolver",
+        "description": (
+            "Reproduce a Linear bug ticket against the product code in the sandbox, prove any fix with repros and "
+            "a regression test, and reply to the customer only through the approval-gated ticket-gate."
+        ),
+        "path": "skills/ticket-resolver",
+    },
 ]
 
 
