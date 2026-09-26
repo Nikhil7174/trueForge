@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 
 from trueforge_hackathon.agents.cost_janitor.policy import DESTRUCTIVE_TOOLS, default_region, deny_resource_prefixes
+from trueforge_hackathon.integrations.github_audit import audit_instructions, github_connector, github_mcp_servers
 from trueforge_hackathon.skill_catalog import resolve_skills
 from trueforge_hackathon.types import AgentPlugin, AgentSpec
 
@@ -44,6 +45,7 @@ def _instructions() -> str:
             "then call it with self-describing arguments that match the card. One resource per call.",
             "If the server returns refused, quote it and stop for that resource. If the operator denies, acknowledge the reason and change nothing else.",
             "After every mutation, verify with the matching list tool.",
+            audit_instructions(),
             QUESTION_CONTRACT,
         ]
     )
@@ -64,7 +66,7 @@ def _manifest(*, include_skills: bool) -> AgentSpec:
     spec: AgentSpec = {
         "model": {"name": os.environ.get("TRUEFORGE_MODEL", "openai/gpt-5-5")},
         "instructions": _instructions(),
-        "mcp_servers": cost_janitor_mcp_servers(),
+        "mcp_servers": cost_janitor_mcp_servers() + github_mcp_servers(),
         "config": {
             "sandbox": {"enabled": True, "file_downloads": True},
             "generative_ui": {"enabled": True},
@@ -97,6 +99,7 @@ def create_cost_janitor_plugin() -> AgentPlugin:
             "url": _mcp_url(),
             "description": "AWS EC2/EBS/EIP inventory, CloudTrail activity, live Price List prices, gated cleanup.",
         },
+        "mcps": [c for c in [github_connector()] if c],
         "skills": skills,
         "policy": {
             "denyResourcePrefixes": deny_resource_prefixes(),
