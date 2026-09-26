@@ -28,6 +28,7 @@ TrueForge :8790 ── platform-guardian     one agent; questions and approvals 
   ├─ 7 git-backed skills, Daytona sandbox, dynamic subagents, OpenUI cards
   └─ native approval on every destructive tool, by exact name
 ```
+<img width="1478" height="546" alt="Screenshot 2026-09-26 at 5 55 26 PM" src="https://github.com/user-attachments/assets/df0c6fa9-a243-4ddd-867a-68d47ef32f11" />
 
 ## Run it from a clean clone
 
