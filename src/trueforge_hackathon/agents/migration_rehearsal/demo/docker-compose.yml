@@ -1,0 +1,11 @@
+# Optional: a local "prod" Postgres for trying things without Neon/Supabase.
+#   docker compose -f src/trueforge_hackathon/agents/migration_rehearsal/demo/docker-compose.yml up -d
+#   tf-gate-seed-demo --admin-url postgresql://owner:owner@localhost:5433/appdb --reader-password r --migrator-password m
+services:
+  prod-db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: owner
+      POSTGRES_PASSWORD: owner
+      POSTGRES_DB: appdb
+    ports: ["5433:5432"]

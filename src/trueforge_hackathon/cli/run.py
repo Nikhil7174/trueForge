@@ -15,12 +15,12 @@ DEFAULT_PROMPT = (
 )
 
 
-def _print_approvals(pending: list[PendingApproval]) -> None:
+def _print_approvals(pending: list[PendingApproval], agent: str) -> None:
     print("\n\n--- approval required ---")
     for item in pending:
         print(f"tool: {item.tool_name}")
         print(f"args: {item.arguments}")
-    print("Resume with: tf-run --agent access-reviewer --approve allow --session <id>")
+    print(f"Resume with: tf-run --agent {agent} --approve allow --session <id>")
 
 
 def main() -> None:
@@ -48,7 +48,7 @@ def main() -> None:
         agent_name=plugin["name"],
         session_id=args.session,
         on_approve=lambda pending: (
-            _print_approvals(pending) or (args.approve if args.approve else "pause")
+            _print_approvals(pending, plugin["name"]) or (args.approve if args.approve else "pause")
         ),
         deny_reason="denied from CLI",
     )
