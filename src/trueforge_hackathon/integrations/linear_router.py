@@ -4,9 +4,11 @@ Every task starts as a Linear issue. Issues carrying LINEAR_TRIGGER_LABEL are ha
 the platform-guardian agent (issue title + description = the request). The router talks
 back on the issue with comments and labels:
 
-  LINEAR_TRIGGER_LABEL (default "platform-guardian")   → picked up, session started
-  LINEAR_WAITING_LABEL (default "agent-needs-human")   → paused on a question/approval; answer in TrueForge
-  LINEAR_DONE_LABEL    (default "agent-done")          → finished; final answer posted
+  Agent             (trigger)  → picked up; "Working" while the agent runs
+  Awaiting approval             → paused on a question/approval; answer it in the TrueForge UI
+  Fixed / Declined / Failed     → finished / an approval was denied / error
+  agent-skip                    → ignored
+(names overridable with LINEAR_*_LABEL env vars)
 
 Questions and approvals are answered by the human in the TrueForge UI (the approval
 gate stays there). Run `tf-linear` repeatedly (or `tf-linear --watch`) to pick up new
@@ -37,10 +39,17 @@ STATE_PATH = Path(".linear-state.json")
 
 def _labels() -> tuple[str, str, str]:
     return (
-        os.environ.get("LINEAR_TRIGGER_LABEL", "platform-guardian"),
-        os.environ.get("LINEAR_WAITING_LABEL", "agent-needs-human"),
-        os.environ.get("LINEAR_DONE_LABEL", "agent-done"),
+        os.environ.get("LINEAR_TRIGGER_LABEL", "Agent"),
+        os.environ.get("LINEAR_WAITING_LABEL", "Awaiting approval"),
+        os.environ.get("LINEAR_DONE_LABEL", "Fixed"),
     )
+
+
+WORKING = os.environ.get("LINEAR_WORKING_LABEL", "Working")
+DECLINED = os.environ.get("LINEAR_DECLINED_LABEL", "Declined")
+FAILED = os.environ.get("LINEAR_FAILED_LABEL", "Failed")
+SKIP = os.environ.get("LINEAR_SKIP_LABEL", "agent-skip")
+STATUS_LABELS = ["Working", "Awaiting approval", "Fixed", "Declined", "Failed"]
 
 
 def _agent_name() -> str:
@@ -143,38 +152,52 @@ def _report(client, issue: dict[str, Any], session_id: str, result_output: str |
     approvals, questions = pending_actions(client, session_id)
     if approvals or questions:
         _comment(issue["id"], _waiting_text(approvals, questions) + f"\n\nSession: `{session_id}`")
-        _set_label(issue, waiting, remove=[done])
+        _set_label(issue, waiting, remove=STATUS_LABELS)
         return "waiting"
     output = result_output or _last_output(client, session_id) or "(no final text)"
+    declined = "denied" in output.lower() or "declined" in output.lower()
     _comment(issue["id"], f"**{_agent_name()} finished.**\n\n{output[:60000]}\n\nSession: `{session_id}`")
-    _set_label(issue, done, remove=[waiting])
-    return "done"
+    _set_label(issue, DECLINED if declined else done, remove=STATUS_LABELS)
+    return "declined" if declined else "done"
+
+
+def _handle(client, issue: dict[str, Any], state: dict[str, Any]) -> None:
+    trigger, waiting, done = _labels()
+    names = {n["name"] for n in issue["labels"]["nodes"]}
+    entry = state.get(issue["id"])
+    if SKIP in names or (entry and entry["status"] in ("done", "declined", "failed")):
+        return
+    if entry is None:
+        session_id = client.sessions.create(agent=SessionAgentNameRef(name=_agent_name())).data.id
+        state[issue["id"]] = entry = {"identifier": issue["identifier"], "session_id": session_id, "status": "running"}
+        _save_state(state)
+        _set_label(issue, WORKING, remove=STATUS_LABELS)
+        _comment(issue["id"], f"Picked up by **{_agent_name()}**. TrueForge session `{session_id}` — open it in the TrueForge UI to follow along.")
+        print(f"{issue['identifier']}: started session {session_id}")
+        prompt = f"Linear issue {issue['identifier']}: {issue['title']}\n\n{issue.get('description') or ''}".strip()
+        result = run_turn(client, session_id, [{"type": "user.message", "content": prompt}])
+        entry["status"] = _report(client, issue, session_id, result.output)
+    elif entry["status"] == "waiting":
+        approvals, questions = pending_actions(client, entry["session_id"])
+        if approvals or questions:
+            return  # still waiting for the human in TrueForge
+        entry["status"] = _report(client, issue, entry["session_id"], None)
 
 
 def run_once() -> None:
     load_env_file()
-    trigger, waiting, done = _labels()
+    trigger, _, _ = _labels()
     client = create_trueforge_client()
     state = _load_state()
     for issue in _issues_with_label(trigger):
-        names = {n["name"] for n in issue["labels"]["nodes"]}
-        entry = state.get(issue["id"])
-        if entry is None:
-            session_id = client.sessions.create(agent=SessionAgentNameRef(name=_agent_name())).data.id
-            state[issue["id"]] = {"identifier": issue["identifier"], "session_id": session_id, "status": "running"}
-            _save_state(state)
-            _comment(issue["id"], f"Picked up by **{_agent_name()}**. TrueForge session `{session_id}`.")
-            print(f"{issue['identifier']}: started session {session_id}")
-            prompt = f"Linear issue {issue['identifier']}: {issue['title']}\n\n{issue.get('description') or ''}".strip()
-            result = run_turn(client, session_id, [{"type": "user.message", "content": prompt}])
-            state[issue["id"]]["status"] = _report(client, issue, session_id, result.output)
-        elif entry["status"] == "waiting" and done not in names:
-            approvals, questions = pending_actions(client, entry["session_id"])
-            if approvals or questions:
-                continue  # still waiting for the human in TrueForge
-            entry["status"] = _report(client, issue, entry["session_id"], None)
+        try:
+            _handle(client, issue, state)
+        except Exception as exc:  # noqa: BLE001  report on the issue, keep routing others
+            state.setdefault(issue["id"], {"identifier": issue["identifier"]})["status"] = "failed"
+            _comment(issue["id"], f"**{_agent_name()} failed:** `{type(exc).__name__}: {exc}`")
+            _set_label(issue, FAILED, remove=STATUS_LABELS)
         _save_state(state)
-        print(f"{issue['identifier']}: {state[issue['id']]['status']}")
+        print(f"{issue['identifier']}: {state.get(issue['id'], {}).get('status')}")
 
 
 def main() -> None:
