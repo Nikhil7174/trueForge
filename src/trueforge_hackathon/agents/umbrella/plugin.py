@@ -14,7 +14,7 @@ from typing import Any
 from trueforge_hackathon.registry import get_plugin
 from trueforge_hackathon.types import AgentPlugin, AgentSpec, McpConnector, SkillRef
 
-DEFAULT_MEMBERS = "cost-janitor,access-reviewer,migration-rehearsal"
+DEFAULT_MEMBERS = "cost-janitor,access-reviewer,migration-rehearsal,release-captain,ticket-resolver"
 
 
 def umbrella_agent_name() -> str:
@@ -58,7 +58,7 @@ def _merge_config(members: list[AgentPlugin]) -> dict[str, Any]:
 def _merge_instructions(name: str, members: list[AgentPlugin]) -> str:
     seen: set[str] = set()
     parts = [
-        f"You are {name}, an AWS hygiene agent for a platform team. You combine these jobs: "
+        f"You are {name}, the platform team's agent. You combine these jobs: "
         + "; ".join(f"{p['name']} ({p['description']})" for p in members)
         + ".",
         "Pick the job that matches the request and follow its section and skills. Never mix one job's destructive tools into another job's plan.",
@@ -97,10 +97,12 @@ def create_umbrella_plugin() -> AgentPlugin:
         manifest["skills"] = [{"name": n} for n in dict.fromkeys(s["name"] for s in member_skills)]
 
     all_connectors = list(connectors.values())
+    required = list(dict.fromkeys(c for p in members for c in p.get("requires_connectors", [])))
     return {
+        **({"requires_connectors": required} if required else {}),
         "name": name,
-        "description": "AWS hygiene agent: cleans up waste and right-sizes IAM on live AWS, with evidence, "
-        "sandboxed analysis and human approval on every irreversible action.",
+        "description": "Platform agent: AWS cost cleanup, IAM least privilege, migration rehearsal, release gating and "
+        "bug-ticket resolution, with evidence, sandboxed analysis and human approval on every irreversible action.",
         "manifest": manifest,
         **({"mcp": all_connectors[0], "mcps": all_connectors[1:]} if all_connectors else {}),
         "skills": list(skills.values()),

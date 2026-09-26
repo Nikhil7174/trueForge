@@ -17,3 +17,6 @@ __pycache__/
 infra/.seed-state.json
 # Linear router: issue → TrueForge session map
 .linear-state.json
+# ticket-resolver demo SQLite (rebuilt from the synthetic generator)
+.data/
+.ticket-gate/

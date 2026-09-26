@@ -36,3 +36,4 @@ class AgentPlugin(TypedDict):
     skills: NotRequired[list[SkillRef]]
     policy: NotRequired[dict[str, Any]]
     default_message: NotRequired[str]
+    requires_connectors: NotRequired[list[str]]  # connectors configured in TrueForge, not seeded by us

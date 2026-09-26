@@ -13,6 +13,7 @@ TrueForge runs the agent loop. This repo supplies the MCP tools, the skills, the
 | **cost-janitor** | AWS waste: discover → evidence → price → back up → delete | `delete_volume`, `release_elastic_ip`, `delete_snapshot`, `terminate_instance` |
 | **access-reviewer** | IAM least privilege (`IAM_BACKEND=aws`, or `fixture` for tests) | `revoke_access`, `detach_role_policy`, `put_role_policy` |
 | **migration-rehearsal** | Postgres migration rehearsal ([docs](docs/migration-rehearsal.md)); optional umbrella member | `apply_migration` |
+| **release-captain** | Read the commits since the last tag, run the tests in a sandbox, draft release notes - and refuse to publish while any migration in the release is unapplied. Setup and demo: [docs/release-captain.md](docs/release-captain.md) | `publish_release` |
 
 ## Run it from a clean clone
 
@@ -123,6 +124,7 @@ skills/                                      # TrueForge skill catalog (git-back
   access-review-playbook/                    # IAM least privilege (+ scripts/lint_policy.py)
   blast-radius/                              # shared: explain irreversible actions
   migration-rehearsal/                       # restore → migrate → row diff → verdict (+ sandbox scripts)
+  release-captain/                           # scope → verify → notes → gated publish (+ sandbox scripts)
   _template/                                 # copy-me pack
 src/trueforge_hackathon/
   types.py / registry.py / skill_catalog.py  # AgentPlugin + catalog
@@ -133,11 +135,14 @@ src/trueforge_hackathon/
   agents/cost_janitor/                       # cost-janitor-aws MCP (tf-cost-mcp) + plugin
   agents/access_reviewer/                    # IAM MCP (tf-mcp): backends/fixture.py | backends/aws.py
   agents/migration_rehearsal/                # spec + db-gate MCP (tf-gate) + demo DB seed/migrations
+  agents/release_captain/                    # spec + ship-gate MCP (tf-ship) + GitHub REST
   cli/seed.py
   cli/run.py
-tests/migration_rehearsal_e2e.py             # 27 guard checks against db-gate, no TrueForge needed
+tests/migration_rehearsal_e2e.py             # 28 guard checks against db-gate, no TrueForge needed
+tests/release_captain_e2e.py                 # 27 guard checks against ship-gate, no GitHub needed
 docs/spikes.md                               # verified TrueForge behaviours (sandbox, OpenUI, questions)
 docs/migration-rehearsal.md                  # migration-rehearsal setup + demo script
+docs/release-captain.md                      # release-captain setup + demo script
 ```
 
 ## Skills vs agents
@@ -210,7 +215,10 @@ tf-run --agent access-reviewer
 
 Same commands as a module: `python -m trueforge_hackathon mcp|gate|seed|run`.
 
-The migration-rehearsal plugin uses its own MCP (`tf-gate`) and a demo Postgres. See [docs/migration-rehearsal.md](docs/migration-rehearsal.md).
+The migration-rehearsal plugin uses its own MCP (`tf-gate`) and a demo Postgres. See
+[docs/migration-rehearsal.md](docs/migration-rehearsal.md). The release-captain plugin adds
+`tf-ship` and a GitHub PAT, and reads db-gate's ledger to check migrations are applied. See
+[docs/release-captain.md](docs/release-captain.md).
 
 Try: `Review unused IAM access. Show blast radius. Do not revoke yet.` Then, on the fixture: `Revoke AmazonS3FullAccess from ci-bot.` On live AWS: `Revoke AmazonS3ReadOnlyAccess from tf-hackathon-throwaway.`
 
@@ -246,6 +254,9 @@ tf-run --agent access-reviewer --approve allow --session <session-id> --message 
 | Reach something real | MCP to IAM fixture (swap in live AWS behind `AWS_*`) |
 | Run what it writes | Sandbox / Code Mode + skill pack cloned into the sandbox |
 | Know when to stop | `revoke_access` + `blast-radius` skill + named approval |
+
+`release-captain` goes one step further: `publish_release` refuses while a migration in the release
+is unapplied, so passing tests are not enough to ship. That rule lives in the gate, not the prompt.
 
 Do not put keys in git. Disclose AI assistants in this README when you submit.
 

@@ -34,9 +34,10 @@ def _instructions() -> str:
             f"Never propose or attempt revoke on principals whose names start with: {deny}.",
             "Use list_principals, get_principal_policies, and get_access_last_used first.",
             "Load the access-review-playbook and blast-radius skills when they are attached. Follow them instead of inventing procedure.",
-            "Compute the unused set in the sandbox / Code Mode. Do not invent last-used dates or diffs.",
-            "Present unused access as a table. Each proposed revocation must include blast radius.",
-            "revoke_access is destructive. Call it only for a specific unused attachment the operator asked to revoke, then wait for approval.",
+            "Do not invent last-used dates. Use the active and inactive lists from get_access_last_used.",
+            "Present two tables: Active (used within 90 days — keep) and Inactive (unused — candidates to revoke).",
+            "Only propose revoke for inactive attachments. Ask the operator which inactive policy to remove.",
+            "revoke_access is destructive. Call it only for a specific inactive attachment the operator named, then wait for approval.",
             "After a revoke is allowed, re-read the principal to confirm.",
         ]
     )
@@ -107,6 +108,10 @@ def create_access_reviewer_plugin() -> AgentPlugin:
             "and revoke nothing until a human approves."
         ),
         "manifest": _manifest(include_skills=attach_skills),
+        "default_message": (
+            "Review IAM access for NikhilZynix. Show Active (used within 90 days) and "
+            "Inactive (unused) tables with blast radius. Do not revoke until I pick an inactive policy."
+        ),
         "mcp": {
             "name": ACCESS_REVIEWER_MCP_NAME,
             "url": _mcp_url(),

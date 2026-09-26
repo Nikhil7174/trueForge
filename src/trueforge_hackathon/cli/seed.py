@@ -35,6 +35,20 @@ def _seed_connector(client, mcp) -> None:
     print(f"MCP connector: {mcp['name']} → {mcp['url']}")
 
 
+def _check_connectors(client, plugin: AgentPlugin) -> None:
+    for name in plugin.get("requires_connectors") or []:
+        try:
+            client.settings.mcp_servers.get(name=name)
+        except ApiError as exc:
+            if exc.status_code != 404:
+                raise
+            raise SystemExit(
+                f"{plugin['name']} needs the '{name}' connector. Add it in TrueForge Settings → Connectors "
+                "(from the catalog), authenticate it, then re-run seed."
+            ) from exc
+        print(f"Connector: {name} (already configured)")
+
+
 def _seed_skills(client) -> None:
     ready = skills_ready_to_register()
     if not ready:
@@ -93,6 +107,7 @@ def _main(argv: list[str] | None = None) -> None:
     _seed_skills(client)
     for plugin in plugins:
         print(f"\nSeeding {plugin['name']}")
+        _check_connectors(client, plugin)
         _seed_mcp(client, plugin)
         _seed_agent(client, plugin)
     print("\nDone. Open TrueForge, pick the agent, and run a review.")

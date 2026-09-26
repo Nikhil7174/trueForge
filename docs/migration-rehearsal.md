@@ -12,8 +12,9 @@ No real PHI: every name, MBI, NPI and claim is generated.
 
 It is the second plugin in this template, next to `access-reviewer`: same adapter, same
 `tf-seed` / `tf-run`, its own MCP (`db-gate`) and skill pack (`skills/migration-rehearsal`).
-A Release Captain (commits → tests → release notes → tag/publish) would come next and use
-`migration_status` from the same gate as its entry ticket.
+The Release Captain (commits → tests → release notes → tag/publish) is the other half of this: it
+uses the same ledger to refuse publishing a release whose migrations are not applied. See
+[docs/release-captain.md](release-captain.md).
 
 ```
 TrueForge local (npx)                          your machine
@@ -52,6 +53,10 @@ and gives the agent only the path, and `rehearse.py run --snapshot <path>` reads
 - **schema drift**: prod's fingerprint changed since the snapshot
 - a post-apply schema that differs from the rehearsal result. It **rolls back** instead.
 - a stale rehearsal (over 24 h), a migration that's already applied, or non-transactional statements
+- a rehearsal run on a **different Postgres major than production**. `rehearse.py` checks the
+  restored fingerprint too, but that check runs in the sandbox where an agent can edit it out - one
+  did, during testing, then rehearsed a PostgreSQL 16 dump on 15. So the snapshot records
+  production's `server_version` and the gate re-checks it here, where the sandbox cannot reach.
 
 The gate also recomputes the verdict from raw findings on `submit_rehearsal` rather than
 trusting the report's label, and a digest over the report catches edits in transit.
@@ -66,8 +71,9 @@ Verdict rules (`gatecore.compute_verdict`, shared by sandbox and gate):
 
 ## Setup (about 15 minutes)
 
-**Prerequisites:** Python 3.12+, Node 22.14+, `pg_dump` at or above your server's major
-version, a Postgres you own (Neon or Supabase free tier works), a model API key, and a
+**Prerequisites:** Python 3.12+, Node 22.14+, a `pg_dump` at or above your server's major
+version (the gate checks the ones it can find and falls back to `pgserver`'s bundled 16, so a stray
+older `pg_dump` on `PATH` no longer breaks it), a Postgres you own (Neon or Supabase free tier works), a model API key, and a
 Daytona API key for the sandbox. The skill is fetched from Git, so this repo has to be
 pushed to GitHub or GitLab.
 
@@ -159,12 +165,12 @@ That's the "where the code ran" proof.
 ## Verify without TrueForge
 
 `tests/migration_rehearsal_e2e.py` plays the agent's role. It calls the gate over MCP exactly as
-TrueForge does, runs `rehearse.py` locally, and runs 27 checks: bearer auth,
+TrueForge does, runs `rehearse.py` locally, and runs 28 checks: bearer auth,
 BLOCK/SAFE/REVIEW, tampered and relabelled reports, wrong SQL, wrong target, paraphrased
 summary, unknown and stale rehearsals, drift (manual and after a real apply), double apply,
 rollback on a post-apply schema mismatch, non-transactional statements, `migration_status`,
-rewrites in tables without a primary key, sequences moved backwards, and a sandbox `query`
-that can't write.
+rewrites in tables without a primary key, sequences moved backwards, a sandbox `query`
+that can't write, and a rehearsal run on the wrong Postgres major.
 
 ```bash
 rm -rf .gate && tf-gate-seed-demo ...   # fresh demo DB + empty ledger
