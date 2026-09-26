@@ -21,7 +21,11 @@ def main() -> int:
     ec2 = sess.client("ec2")
     iam = sess.client("iam")
     state = load_state()
-    vol = next(iter(state.get("volumes", {}).values()), "vol-00000000000000000")
+    # Dry runs need a real volume ID: a seeded one, else any volume in the region.
+    vol = next(iter(state.get("volumes", {}).values()), None)
+    if vol is None:
+        found = ec2.describe_volumes(MaxResults=5)["Volumes"]
+        vol = found[0]["VolumeId"] if found else None
     role = next(iter(state.get("roles", {})), None)
 
     checks: list[tuple[str, Callable[[], object]]] = [
@@ -35,9 +39,14 @@ def main() -> int:
             ServiceCode="AmazonEC2", MaxResults=1,
             Filters=[{"Type": "TERM_MATCH", "Field": "regionCode", "Value": REGION}])),
         ("iam:ListRoles", lambda: iam.list_roles(MaxItems=1)),
-        ("ec2:CreateSnapshot (dry run)", lambda: ec2.create_snapshot(VolumeId=vol, DryRun=True)),
-        ("ec2:DeleteVolume (dry run)", lambda: ec2.delete_volume(VolumeId=vol, DryRun=True)),
     ]
+    if vol:
+        checks += [
+            ("ec2:CreateSnapshot (dry run)", lambda: ec2.create_snapshot(VolumeId=vol, DryRun=True)),
+            ("ec2:DeleteVolume (dry run)", lambda: ec2.delete_volume(VolumeId=vol, DryRun=True)),
+        ]
+    else:
+        print("skip  ec2:CreateSnapshot / ec2:DeleteVolume dry runs (no volume in region yet; re-run after make seed)")
     if role:
         checks += [
             ("iam:GetRole", lambda: iam.get_role(RoleName=role)),
