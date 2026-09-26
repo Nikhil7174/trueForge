@@ -12,3 +12,7 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .gate/
+
+# ticket-resolver demo SQLite (rebuilt from the synthetic generator)
+.data/
+.ticket-gate/
