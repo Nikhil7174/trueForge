@@ -262,6 +262,9 @@ def register_webhook(url: str):
 # ---------------------------------------------------------------- main
 
 def serve():
+    import logging
+
+    logging.getLogger("httpx").setLevel(logging.WARNING)  # one line per Linear poll otherwise
     if not linear.api_key:
         sys.exit("tf-ticket-trigger: LINEAR_API_KEY is not set")
     if MODE not in ("both", "webhook", "poll"):
