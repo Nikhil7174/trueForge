@@ -18,6 +18,14 @@ SKILL_CATALOG: list[SkillRef] = [
         "description": "Before any destructive tool, spell out who and what breaks, then wait for a human.",
         "path": "skills/blast-radius",
     },
+    {
+        "name": "migration-rehearsal",
+        "description": (
+            "Rehearse a Postgres migration on a production snapshot in the sandbox, diff every row, "
+            "get a gate-verified verdict, and apply only through the approval-gated gate."
+        ),
+        "path": "skills/migration-rehearsal",
+    },
 ]
 
 

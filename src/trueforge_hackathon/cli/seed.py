@@ -4,7 +4,7 @@ import argparse
 import sys
 
 import trueforge_hackathon  # noqa: F401  registers plugins
-from trueforge_sdk import GitSkill, RemoteMcpServerManifest
+from trueforge_sdk import GitSkill, McpServerHeaderAuth, RemoteMcpServerManifest
 from trueforge_sdk.core.api_error import ApiError
 
 from trueforge_hackathon.adapter.client import create_trueforge_client
@@ -18,11 +18,13 @@ def _seed_mcp(client, plugin: AgentPlugin) -> None:
     mcp = plugin.get("mcp")
     if not mcp:
         return
+    headers = mcp.get("headers")
     client.settings.mcp_servers.create_or_update(
         manifest=RemoteMcpServerManifest(
             name=mcp["name"],
             url=mcp["url"],
             description=mcp.get("description", ""),
+            auth=McpServerHeaderAuth(headers=headers) if headers else None,
         )
     )
     print(f"MCP connector: {mcp['name']} → {mcp['url']}")

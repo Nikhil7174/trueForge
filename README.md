@@ -1,6 +1,11 @@
 # TrueForge hackathon template
 
-Generic TrueForge integration: **one adapter, many agent plugins**. First plugin is **Access Reviewer** (official starter #05 — reach IAM, gate on revoke).
+Generic TrueForge integration: **one adapter, many agent plugins**.
+
+| Plugin | Job | Gate |
+|---|---|---|
+| **access-reviewer** | Official starter #05: reach IAM, find unused access | `revoke_access` |
+| **migration-rehearsal** | Restore prod into a sandbox, run a Postgres migration there, diff every row, report a SAFE / REVIEW / BLOCK verdict. Setup and demo: [docs/migration-rehearsal.md](docs/migration-rehearsal.md) | `apply_migration` |
 
 TrueForge runs the agent loop. We only supply the job, MCP tools, **skills catalog**, and approval policy.
 
@@ -12,14 +17,18 @@ For what the hackathon required, what we built, and what is still stubbed, see [
 skills/                                      # TrueForge skill catalog (git-backed SKILL.md)
   access-review-playbook/                    # unused IAM + Code Mode + stop
   blast-radius/                              # shared: explain irreversible actions
+  migration-rehearsal/                       # restore → migrate → row diff → verdict (+ sandbox scripts)
   _template/                                 # copy-me pack
 src/trueforge_hackathon/
   types.py / registry.py / skill_catalog.py  # AgentPlugin + catalog
   adapter/                                   # client, session/turn, approval pause
   agents/_template/                          # copy-me agent (no skill folder here)
   agents/access_reviewer/                    # spec + MCP only; attaches skills by name
+  agents/migration_rehearsal/                # spec + db-gate MCP (tf-gate) + demo DB seed/migrations
   cli/seed.py
   cli/run.py
+tests/migration_rehearsal_e2e.py             # 23 guard checks against db-gate, no TrueForge needed
+docs/migration-rehearsal.md                  # migration-rehearsal setup + demo script
 ```
 
 ## Skills vs agents
@@ -62,7 +71,7 @@ cp .env.example .env
 # set TRUEFORGE_MODEL
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e .
+pip install -e .              # add '.[migration]' for the migration-rehearsal plugin
 ```
 
 Skills need a public git URL before seed can attach them. Do this in order:
@@ -86,7 +95,9 @@ tf-seed
 tf-run --agent access-reviewer
 ```
 
-Same commands as a module: `python -m trueforge_hackathon mcp|seed|run`.
+Same commands as a module: `python -m trueforge_hackathon mcp|gate|seed|run`.
+
+The migration-rehearsal plugin uses its own MCP (`tf-gate`) and a demo Postgres. See [docs/migration-rehearsal.md](docs/migration-rehearsal.md).
 
 Try: `Review unused IAM access. Show blast radius. Do not revoke yet.` Then: `Revoke AmazonS3FullAccess from ci-bot.`
 
@@ -125,4 +136,4 @@ tf-run --agent access-reviewer --approve allow --session <session-id> --message 
 
 Do not put keys in git. Disclose AI assistants in this README when you submit.
 
-**AI assistants used while building:** Cursor.
+**AI assistants used while building:** Cursor; Claude (Anthropic) for the migration-rehearsal plugin.

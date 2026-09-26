@@ -187,13 +187,14 @@ Operator  →  TrueForge UI or tf-run
 - [x] TrueForge bundled UI as the product surface
 - [x] README how-to + this document
 - [x] Entire integration in Python (`trueforge-sdk` + FastMCP)
+- [x] Second plugin: **migration-rehearsal** (see section 8)
 
 ### Designed, not coded yet
 
 - [ ] Live AWS IAM behind the same four tools
 - [ ] Skill registration without a public git URL (needs `SKILL_GIT_URL` after push)
 - [ ] Custom / embedded `@truefoundry/trueforge-ui`
-- [ ] Second plugin (Fargate janitor)
+- [ ] Third plugin (Fargate janitor)
 - [ ] TrueForge Schedules (daily unused-access brief)
 - [ ] Catalog MCP (GitHub, etc.) attached alongside ours
 
@@ -229,5 +230,23 @@ Try revoke on `BreakGlassAdmin` to show MCP policy (refused even if the model as
 | Where it stops | Named approval + `destructiveHint` + deny list |
 | Job worth handing over | Unused IAM review is a real chore |
 | Demo clarity | One job, one gate, TrueForge Sessions as the log |
+
+---
+
+## 8. Second plugin: migration-rehearsal
+
+> Take a Postgres migration, restore a copy of production into the sandbox, run the migration there, diff what happened to every row, and apply to production only through an approval-gated tool.
+
+| Piece | Path |
+|---|---|
+| Agent spec + connector | `src/trueforge_hackathon/agents/migration_rehearsal/plugin.py` (MCP `db-gate` with bearer auth, `require_approval_for_tools: ["apply_migration"]`, skill `migration-rehearsal`) |
+| MCP | `src/trueforge_hackathon/agents/migration_rehearsal/gate_server.py` (`tf-gate`): `export_snapshot` (read-only role), `submit_rehearsal`, `apply_migration` (destructive), `migration_status` |
+| Skill pack | `skills/migration-rehearsal/` with `rehearse.py` (runs in the sandbox), `gatecore.py` (verdict rules shared with the gate), `setup_sandbox.sh` |
+| Demo data | `agents/migration_rehearsal/demo/` (`tf-gate-seed-demo`: synthetic Medicare ACO claims DB, no PHI) and three demo migrations |
+| Guard test | `tests/migration_rehearsal_e2e.py`: 23 checks (tampered reports, drift, stale rehearsals, rollback, …) |
+
+Policy lives in the gate, not the prompt: `apply_migration` refuses SQL that wasn't rehearsed, BLOCK verdicts, REVIEW without `accept_review`, schema drift, stale rehearsals, double applies and non-transactional statements, and rolls back when prod's post-apply schema differs from the rehearsal.
+
+Template changes it needed: `McpConnector.headers` (seeded as TrueForge header auth), `.env` loaded before plugins register, and `tf-gate` / `tf-gate-seed-demo` scripts. Full setup and demo: [docs/migration-rehearsal.md](docs/migration-rehearsal.md).
 
 **AI assistants used while building:** Cursor.

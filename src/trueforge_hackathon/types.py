@@ -15,6 +15,7 @@ class McpConnector(TypedDict):
     name: str
     url: str
     description: str
+    headers: NotRequired[dict[str, str]]
 
 
 class SkillRef(TypedDict):

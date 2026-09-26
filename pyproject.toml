@@ -1,7 +1,7 @@
 [project]
 name = "trueforge-hackathon"
 version = "0.1.0"
-description = "Generic TrueForge integration template. First plugin: access-reviewer."
+description = "Generic TrueForge integration template. Plugins: access-reviewer, migration-rehearsal."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -11,8 +11,17 @@ dependencies = [
   "starlette>=0.41.0",
 ]
 
+[project.optional-dependencies]
+# migration-rehearsal: db-gate (psycopg) + bundled Postgres 16 for local rehearsals and pg_dump fallback
+migration = [
+  "psycopg[binary]>=3.1",
+  "pgserver>=0.1.4",
+]
+
 [project.scripts]
 tf-mcp = "trueforge_hackathon.agents.access_reviewer.mcp_server:main"
+tf-gate = "trueforge_hackathon.agents.migration_rehearsal.gate_server:main"
+tf-gate-seed-demo = "trueforge_hackathon.agents.migration_rehearsal.demo.seed:main"
 tf-seed = "trueforge_hackathon.cli.seed:main"
 tf-run = "trueforge_hackathon.cli.run:main"
 
