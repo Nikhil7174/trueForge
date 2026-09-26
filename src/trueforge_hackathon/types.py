@@ -33,3 +33,4 @@ class AgentPlugin(TypedDict):
     mcp: NotRequired[McpConnector]
     skills: NotRequired[list[SkillRef]]
     policy: NotRequired[dict[str, Any]]
+    default_message: NotRequired[str]

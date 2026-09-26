@@ -180,6 +180,11 @@ def fingerprint(conn) -> str:
 
 # ---------------------------------------------------------------- verdict
 
+def _seq_pos(value) -> int:
+    """pg_sequences.last_value; NULL means nothing has been drawn yet."""
+    return 0 if value is None else int(value)
+
+
 def compute_verdict(findings: dict) -> tuple[str, list[str]]:
     """The only place a verdict is decided. Returns (verdict, reasons)."""
     block, review = [], []
@@ -202,8 +207,11 @@ def compute_verdict(findings: dict) -> tuple[str, list[str]]:
                 review.append(f"{name}.{col} changed on {n} rows")
         if t.get("status") != "new" and t.get("rows_inserted", 0) > 0:
             review.append(f"{name}: {t['rows_inserted']} rows inserted")
-        if t.get("no_primary_key") and t.get("rows_before") != t.get("rows_after"):
-            review.append(f"{name}: row count changed and table has no primary key to diff")
+        if t.get("no_primary_key") and t.get("rows_modified", 0) > 0:
+            review.append(f"{name}: {t['rows_modified']} rows rewritten (no primary key to diff by)")
+    for name, s in sorted(findings.get("sequences", {}).items()):
+        if _seq_pos(s.get("after")) < _seq_pos(s.get("before")):
+            review.append(f"sequence {name} moved back from {s.get('before')} to {s.get('after')}")
     lock_ms = findings.get("locks", {}).get("max_write_lock_ms", 0)
     if lock_ms > LOCK_REVIEW_MS:
         review.append(f"write lock held {lock_ms} ms (> {LOCK_REVIEW_MS} ms)")
@@ -241,6 +249,8 @@ def summarize(findings: dict, verdict: str) -> str:
             bits.append(f"{t['rows_deleted']:,} rows deleted")
         if t.get("rows_inserted"):
             bits.append(f"{t['rows_inserted']:,} rows inserted")
+        if t.get("no_primary_key") and t.get("rows_modified"):
+            bits.append(f"{t['rows_modified']:,} rows rewritten (no primary key)")
         for col, n in sorted(t.get("columns_changed", {}).items()):
             bits.append(f"{col} rewritten on {n:,}/{t.get('rows_before', 0):,} rows")
         for col, n in sorted(t.get("columns_added", {}).items()):
@@ -249,6 +259,9 @@ def summarize(findings: dict, verdict: str) -> str:
             bits.append(f"-{col}")
         if bits:
             parts.append(f"{name}: " + ", ".join(bits))
+    for name, seq in sorted(findings.get("sequences", {}).items()):
+        if _seq_pos(seq.get("after")) < _seq_pos(seq.get("before")):
+            parts.append(f"sequence {name} moved back {seq.get('before')} -> {seq.get('after')}")
     locks = findings.get("locks", {})
     if locks.get("max_write_lock_ms") is not None and locks.get("tables"):
         worst = max(locks["tables"].items(), key=lambda kv: kv[1]["held_ms"])

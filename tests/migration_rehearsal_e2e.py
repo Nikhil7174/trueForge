@@ -224,6 +224,31 @@ async def run(gate: Gate):
           == ("applied", "blocked", "ready_needs_review"),
           (st_v2.get("state"), st_0007.get("state"), st_0008.get("state")))
 
+    print("\n8. changes a row count can't see")
+    admin("CREATE TABLE audit_log (at timestamptz DEFAULT now(), actor text, note text); "
+          "ALTER TABLE audit_log OWNER TO app_owner; GRANT SELECT ON audit_log TO gate_reader; "
+          "INSERT INTO audit_log (actor, note) SELECT 'seed', 'row ' || g FROM generate_series(1, 100) g")
+    try:
+        snap3 = await gate.snapshot()
+        for name, sql, why in [
+            ("0097_nopk_update.sql", "UPDATE audit_log SET note = 'wiped';", "rewrite of a table with no primary key"),
+            ("0096_nopk_swap.sql", "DELETE FROM audit_log; INSERT INTO audit_log (actor, note) "
+                                   "SELECT 'x', 'y' FROM generate_series(1, 100);",
+             "delete + reinsert of the same row count, no primary key"),
+            ("0095_setval.sql", "SELECT setval('claims_id_seq', 1);", "a sequence moved backwards"),
+        ]:
+            s = await gate.call("submit_rehearsal", report_json=json.dumps(rehearse(snap3, write_sql(name, sql))))
+            check(f"{why} -> REVIEW", s.get("verdict") == "REVIEW", s.get("summary") or s)
+    finally:
+        admin("DROP TABLE audit_log")
+
+    print("\n9. sandbox query is read-only for real")
+    p = subprocess.run([sys.executable, str(REHEARSE), "query", "--db", "before",
+                        "COMMIT; BEGIN READ WRITE; DELETE FROM diagnoses WHERE id = 1"],
+                       capture_output=True, text=True, env={**os.environ, "REHEARSAL_HOME": str(WORK / "pg")})
+    check("query can't write, even after COMMIT; BEGIN READ WRITE",
+          p.returncode != 0 and "permission denied" in p.stderr, (p.returncode, p.stdout, p.stderr))
+
 
 async def main():
     if not TOKEN or not ADMIN_URL:

@@ -27,7 +27,7 @@ src/trueforge_hackathon/
   agents/migration_rehearsal/                # spec + db-gate MCP (tf-gate) + demo DB seed/migrations
   cli/seed.py
   cli/run.py
-tests/migration_rehearsal_e2e.py             # 23 guard checks against db-gate, no TrueForge needed
+tests/migration_rehearsal_e2e.py             # 27 guard checks against db-gate, no TrueForge needed
 docs/migration-rehearsal.md                  # migration-rehearsal setup + demo script
 ```
 

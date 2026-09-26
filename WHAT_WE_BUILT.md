@@ -243,7 +243,7 @@ Try revoke on `BreakGlassAdmin` to show MCP policy (refused even if the model as
 | MCP | `src/trueforge_hackathon/agents/migration_rehearsal/gate_server.py` (`tf-gate`): `export_snapshot` (read-only role), `submit_rehearsal`, `apply_migration` (destructive), `migration_status` |
 | Skill pack | `skills/migration-rehearsal/` with `rehearse.py` (runs in the sandbox), `gatecore.py` (verdict rules shared with the gate), `setup_sandbox.sh` |
 | Demo data | `agents/migration_rehearsal/demo/` (`tf-gate-seed-demo`: synthetic Medicare ACO claims DB, no PHI) and three demo migrations |
-| Guard test | `tests/migration_rehearsal_e2e.py`: 23 checks (tampered reports, drift, stale rehearsals, rollback, …) |
+| Guard test | `tests/migration_rehearsal_e2e.py`: 27 checks (tampered reports, drift, stale rehearsals, rollback, …) |
 
 Policy lives in the gate, not the prompt: `apply_migration` refuses SQL that wasn't rehearsed, BLOCK verdicts, REVIEW without `accept_review`, schema drift, stale rehearsals, double applies and non-transactional statements, and rolls back when prod's post-apply schema differs from the rehearsal.
 

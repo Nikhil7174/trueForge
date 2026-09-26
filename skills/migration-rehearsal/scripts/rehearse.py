@@ -23,6 +23,7 @@ import re
 import subprocess
 import sys
 import time
+from collections import Counter
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -31,6 +32,22 @@ import gatecore  # noqa: E402
 HOME = Path(os.environ.get("REHEARSAL_HOME", "/tmp/rehearsal"))
 PGDATA = HOME / "pgdata"
 SNAPSHOT_MAGIC = "RELEASE-GATE-SNAPSHOT v1 "
+QUERY_ROLE = "rehearsal_reader"
+
+
+def use_rehearsal_venv():
+    """setup_sandbox.sh puts pgserver in a Python 3.12 venv when the sandbox's python3 is too new
+    for its wheels. Re-run this script there so `python3 rehearse.py ...` keeps working."""
+    try:
+        import pgserver  # noqa: F401
+        import psycopg  # noqa: F401
+        return
+    except ImportError:
+        pass
+    venv = Path(os.environ.get("REHEARSAL_VENV", "/tmp/rehearsal-venv"))
+    venv_py = venv / "bin" / "python"
+    if venv_py.exists() and Path(sys.prefix).resolve() != venv.resolve():
+        os.execv(str(venv_py), [str(venv_py), str(Path(__file__).resolve()), *sys.argv[1:]])
 
 
 def die(msg: str, code: int = 2):
@@ -107,8 +124,21 @@ def restore(srv, dump: str):
     if p.returncode != 0:
         die(f"restore failed:\n{p.stderr[-2000:]}")
     with connect(srv, "postgres") as c:
+        c.execute(f"DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{QUERY_ROLE}') "
+                  f"THEN CREATE ROLE {QUERY_ROLE} LOGIN; END IF; END $$")
+    grant_query_role(srv, "before")
+    with connect(srv, "postgres") as c:
         c.execute("CREATE DATABASE after TEMPLATE before")
     return int((time.monotonic() - t0) * 1000)
+
+
+def grant_query_role(srv, db: str):
+    """`query` connects as QUERY_ROLE, which can only SELECT, so even `COMMIT; BEGIN READ WRITE; ...`
+    can't change the databases the report was built from."""
+    with connect(srv, db) as c:
+        c.execute(f"GRANT USAGE ON SCHEMA public TO {QUERY_ROLE}")
+        c.execute(f"GRANT SELECT ON ALL TABLES IN SCHEMA public TO {QUERY_ROLE}")
+        c.execute(f"GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO {QUERY_ROLE}")
 
 
 # ---------------------------------------------------------------- migration run
@@ -202,6 +232,25 @@ def fetch_rows(conn, table: str, pk: list[str], cols: list[str]) -> dict:
     return rows
 
 
+def fetch_multiset(conn, table: str, cols: list[str]) -> Counter:
+    sel = ", ".join(f"{qi(c)}::text" for c in cols) or "1"
+    with conn.cursor(name=f"ms_{table}") as cur:
+        cur.itersize = 20000
+        cur.execute(f"SELECT {sel} FROM {qi(table)}")
+        return Counter(tuple(r) for r in cur)
+
+
+SEQ_Q = "SELECT sequencename, last_value FROM pg_sequences WHERE schemaname = 'public'"
+
+
+def sequence_diff(srv) -> dict:
+    """Sequences whose position changed. Moving one backwards (setval, RESTART) sets up key collisions."""
+    with connect(srv, "before") as b, connect(srv, "after") as a:
+        before, after = dict(b.execute(SEQ_Q).fetchall()), dict(a.execute(SEQ_Q).fetchall())
+    return {name: {"before": before.get(name), "after": after[name]}
+            for name in sorted(after) if name in before and before[name] != after[name]}
+
+
 def count(conn, table: str, col: str | None = None) -> int:
     expr = f"count({qi(col)})" if col else "count(*)"
     return conn.execute(f"SELECT {expr} FROM {qi(table)}").fetchone()[0]
@@ -248,9 +297,15 @@ def diff(srv) -> dict:
                                 s.append({"pk": "/".join(k), "before": rb[k][idx], "after": ra[k][idx]})
                 info["rows_modified"] = changed_rows
             else:
+                # No key to pair rows by: compare the tables as multisets of rows (over the columns both
+                # sides have). A rewritten row shows up as one row gone and one row new.
                 info["no_primary_key"] = True
-                info["rows_deleted"] = max(0, info["rows_before"] - info["rows_after"])
-                info["rows_inserted"] = max(0, info["rows_after"] - info["rows_before"])
+                cb_rows = fetch_multiset(b, t, common)
+                ca_rows = fetch_multiset(a, t, common)
+                gone, new = sum((cb_rows - ca_rows).values()), sum((ca_rows - cb_rows).values())
+                info["rows_modified"] = min(gone, new)
+                info["rows_deleted"] = gone - info["rows_modified"]
+                info["rows_inserted"] = new - info["rows_modified"]
             if (info["rows_deleted"] or info["rows_inserted"] or info["rows_modified"] or added or dropped):
                 info["status"] = "changed"
             if not info["samples"]:
@@ -291,11 +346,14 @@ def cmd_run(args):
     else:
         mig, locks, stmt_log = run_migration(srv, sql)
 
+    grant_query_role(srv, "after")  # tables the migration created
     tables = diff(srv) if mig["ok"] else {}
+    sequences = sequence_diff(srv) if mig["ok"] else {}
     with connect(srv, "after") as c:
         after_fp = gatecore.fingerprint(c)
 
-    findings = {"migration": mig, "non_transactional": non_tx, "tables": tables, "locks": locks,
+    findings = {"migration": mig, "non_transactional": non_tx, "tables": tables, "sequences": sequences,
+                "locks": locks,
                 "statements": stmt_log, "schema_changed": after_fp != restored_fp}
     verdict, reasons = gatecore.compute_verdict(findings)
     report = {
@@ -339,7 +397,7 @@ def cmd_run(args):
 def cmd_query(args):
     srv = server()
     import psycopg
-    with psycopg.connect(srv.get_uri(args.db),
+    with psycopg.connect(srv.get_uri(args.db), user=QUERY_ROLE,
                          options="-c default_transaction_read_only=on -c statement_timeout=30s") as c:
         try:
             cur = c.execute(args.sql)
@@ -361,6 +419,7 @@ def cmd_query(args):
 
 
 def main():
+    use_rehearsal_venv()
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run", help="restore snapshot, run migration, diff, write report")
