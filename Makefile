@@ -23,4 +23,4 @@ mcp-iam:
 
 # Register skills, connectors and the umbrella agent in TrueForge.
 agent:
-	IAM_BACKEND=$${IAM_BACKEND:-aws} .venv/bin/tf-seed $${UMBRELLA_AGENT_NAME:-aws-hygiene}
+	IAM_BACKEND=$${IAM_BACKEND:-aws} $(PY) -c "import trueforge_hackathon; from trueforge_hackathon.agents.umbrella.plugin import umbrella_agent_name; from trueforge_hackathon.cli.seed import main; main([umbrella_agent_name()])"
