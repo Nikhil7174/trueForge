@@ -1,4 +1,4 @@
-# aws-hygiene: an AWS hygiene agent on TrueForge
+# platform-guardian: an AWS hygiene agent on TrueForge
 
 One agent that does two jobs a platform team rarely has time for, on a **live AWS account**:
 
@@ -9,7 +9,7 @@ TrueForge runs the agent loop. This repo supplies the MCP tools, the skills, the
 
 | Plugin | Job | Gate (literal tool names) |
 |---|---|---|
-| **aws-hygiene** (umbrella) | One agent merging the members below (`UMBRELLA_MEMBERS`) | union of the members' gates |
+| **platform-guardian** (umbrella) | One agent merging the members below (`UMBRELLA_MEMBERS`) | union of the members' gates |
 | **cost-janitor** | AWS waste: discover → evidence → price → back up → delete | `delete_volume`, `release_elastic_ip`, `delete_snapshot`, `terminate_instance` |
 | **access-reviewer** | IAM least privilege (`IAM_BACKEND=aws`, or `fixture` for tests) | `revoke_access`, `detach_role_policy`, `put_role_policy` |
 | **migration-rehearsal** | Postgres migration rehearsal ([docs](docs/migration-rehearsal.md)); optional umbrella member | `apply_migration` |
@@ -43,9 +43,9 @@ make seed                   # creates the us-west-2 environment (see "Real vs st
    ```bash
    make mcp-cost   # cost-janitor-aws MCP on :8766
    make mcp-iam    # access-reviewer-iam MCP on :8765 (IAM_BACKEND=aws)
-   make agent      # registers skills (git-backed from SKILL_GIT_URL@SKILL_GIT_REF), connectors, and the aws-hygiene agent
+   make agent      # registers skills (git-backed from SKILL_GIT_URL@SKILL_GIT_REF), connectors, and the platform-guardian agent
    ```
-4. **Open Agents → aws-hygiene** and try:
+4. **Open Agents → platform-guardian** and try:
    - `Clean up unattached EBS volumes and idle IPs in us-west-2.`
    - `Review least privilege for our CI and analytics roles.`
 5. **Remove everything the seed created** (plus the backups the agent took) with `make teardown`.
@@ -135,7 +135,7 @@ src/trueforge_hackathon/
   agents/migration_rehearsal/                # spec + db-gate MCP (tf-gate) + demo DB seed/migrations
   cli/seed.py
   cli/run.py
-tests/migration_rehearsal_e2e.py             # 23 guard checks against db-gate, no TrueForge needed
+tests/migration_rehearsal_e2e.py             # 27 guard checks against db-gate, no TrueForge needed
 docs/spikes.md                               # verified TrueForge behaviours (sandbox, OpenUI, questions)
 docs/migration-rehearsal.md                  # migration-rehearsal setup + demo script
 ```
@@ -167,7 +167,8 @@ Do not rebuild these: agent loop, MCP routing, sandbox-as-a-tool, Code Mode, com
 ## Prerequisites
 
 - Python 3.12+
-- Node.js 22.14+ only for the TrueForge server: `npx @truefoundry/trueforge` → [http://localhost:8790](http://localhost:8790)
+- Node.js 22.14+ only for the TrueForge server. Allow the local MCP host, then start it:
+  `OUTBOUND_URL_ALLOWED_HOSTS='["localhost","127.0.0.1"]' npx @truefoundry/trueforge` → [http://localhost:8790](http://localhost:8790)
 - A model provider configured in TrueForge **Settings → Models**
 - Daytona sandbox — **required for this demo**. Skills and Code Mode load `SKILL.md` in the sandbox; without Daytona the playbook never attaches.
 - A public GitHub/GitLab clone of **this** repo. TrueForge fetches `skills/` from that URL (see order below).
@@ -178,10 +179,13 @@ Do not rebuild these: agent loop, MCP routing, sandbox-as-a-tool, Code Mode, com
 cd trueforge-hackathon
 cp .env.example .env
 # set TRUEFORGE_MODEL
+# optional live AWS: AWS_PROFILE=default AWS_REGION=us-west-2 DEMO_REVOKE_PRINCIPAL=tf-hackathon-throwaway
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .              # add '.[migration]' for the migration-rehearsal plugin
 ```
+
+With `AWS_PROFILE` or `AWS_ACCESS_KEY_ID` set, the same four tools read real IAM. `revoke_access` can detach a policy only from `DEMO_REVOKE_PRINCIPAL` (default `tf-hackathon-throwaway`). Create that user, attach an unused managed policy, and do not give it access keys. Without AWS vars the in-memory fixture is used.
 
 Skills need a public git URL before seed can attach them. Do this in order:
 
@@ -194,7 +198,7 @@ Without `SKILL_GIT_URL`, seed still creates the agent and instructions cover the
 `tf-mcp` is a long-running server. Leave it up in **one terminal**, then run seed and run in a **second terminal**:
 
 ```bash
-# terminal 1 — IAM fixture MCP; leave this running
+# terminal 1 — IAM MCP (fixture or live AWS); leave this running
 tf-mcp
 
 # terminal 2 — register connectors, skills, and the named agent
@@ -208,7 +212,7 @@ Same commands as a module: `python -m trueforge_hackathon mcp|gate|seed|run`.
 
 The migration-rehearsal plugin uses its own MCP (`tf-gate`) and a demo Postgres. See [docs/migration-rehearsal.md](docs/migration-rehearsal.md).
 
-Try: `Review unused IAM access. Show blast radius. Do not revoke yet.` Then: `Revoke AmazonS3FullAccess from ci-bot.`
+Try: `Review unused IAM access. Show blast radius. Do not revoke yet.` Then, on the fixture: `Revoke AmazonS3FullAccess from ci-bot.` On live AWS: `Revoke AmazonS3ReadOnlyAccess from tf-hackathon-throwaway.`
 
 The second prompt should pause on `revoke_access`. In the UI, Allow or Deny. From the CLI:
 

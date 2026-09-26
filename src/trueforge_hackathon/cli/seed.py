@@ -80,7 +80,7 @@ def _seed_agent(client, plugin: AgentPlugin) -> None:
     print(f"Agent updated: {updated.data.name} ({updated.data.id})")
 
 
-def main(argv: list[str] | None = None) -> None:
+def _main(argv: list[str] | None = None) -> None:
     load_env_file()
     parser = argparse.ArgumentParser(description="Register MCP, skills, and named agents in TrueForge.")
     parser.add_argument("name", nargs="?", help="Seed one plugin. Omit to seed every registered plugin.")
@@ -98,9 +98,15 @@ def main(argv: list[str] | None = None) -> None:
     print("\nDone. Open TrueForge, pick the agent, and run a review.")
 
 
-if __name__ == "__main__":
+def main(argv: list[str] | None = None) -> None:
     try:
-        main()
+        _main(argv)
+    except SystemExit:
+        raise
     except Exception as exc:
         print(exc, file=sys.stderr)
         raise SystemExit(1) from exc
+
+
+if __name__ == "__main__":
+    main()

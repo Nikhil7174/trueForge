@@ -61,7 +61,7 @@ Verdict rules (`gatecore.compute_verdict`, shared by sandbox and gate):
 | Verdict | When |
 |---|---|
 | **BLOCK** | the migration errors; non-transactional statements; rows deleted; a table or a non-empty column dropped |
-| **REVIEW** | existing values rewritten; rows inserted into existing tables; a write-blocking lock held > 2 s |
+| **REVIEW** | existing values rewritten (in tables without a primary key too); rows inserted into existing tables; a sequence moved backwards; a write-blocking lock held > 2 s |
 | **SAFE** | everything else, e.g. new columns/indexes with no existing value changed |
 
 ## Setup (about 15 minutes)
@@ -124,6 +124,10 @@ pushed to GitHub or GitLab.
    ```bash
    tf-run --agent migration-rehearsal --message "Rehearse this migration: <paste SQL>"
    ```
+   When the agent pauses on `apply_migration`, `tf-run` prints the arguments and exits with code 2.
+   To decide on it, run `tf-run --agent migration-rehearsal --session <id> --approve allow` (or `deny`).
+   If the agent asks a question instead, for example whether you accept a REVIEW verdict,
+   answer it with `--session <id> --answer "..."`.
 
 ## Demo script (what to film)
 
@@ -155,10 +159,12 @@ That's the "where the code ran" proof.
 ## Verify without TrueForge
 
 `tests/migration_rehearsal_e2e.py` plays the agent's role. It calls the gate over MCP exactly as
-TrueForge does, runs `rehearse.py` locally, and runs 23 checks: bearer auth,
+TrueForge does, runs `rehearse.py` locally, and runs 27 checks: bearer auth,
 BLOCK/SAFE/REVIEW, tampered and relabelled reports, wrong SQL, wrong target, paraphrased
 summary, unknown and stale rehearsals, drift (manual and after a real apply), double apply,
-rollback on a post-apply schema mismatch, non-transactional statements, and `migration_status`.
+rollback on a post-apply schema mismatch, non-transactional statements, `migration_status`,
+rewrites in tables without a primary key, sequences moved backwards, and a sandbox `query`
+that can't write.
 
 ```bash
 rm -rf .gate && tf-gate-seed-demo ...   # fresh demo DB + empty ledger
@@ -197,11 +203,14 @@ to keep that path valid.
 - **The digest catches accidents, not a model trying to deceive.** A deliberately forged
   report could still pass `submit_rehearsal`. The human approval and the verdict the gate
   recomputes are the backstop. Signing reports inside the sandbox would close this gap.
-- **The sandbox runs Postgres 16** (the `pgserver` wheel). If prod's schema doesn't restore to
+- **The sandbox runs Postgres 16** (the `pgserver` wheel). `pgserver` ships wheels for Python 3.9-3.12
+  on x86_64 Linux and macOS. On a newer Python (Daytona images run 3.13), `setup_sandbox.sh` builds
+  a Python 3.12 venv with `uv` and `rehearse.py` switches to it by itself. If prod's schema doesn't restore to
   the same fingerprint there, for example because of extensions or a newer major version,
   `rehearse.py` refuses rather than rehearsing against something that isn't prod.
 - **Row diffs load each table into memory** in the sandbox. That's fine for demo-sized data;
-  bigger tables would need hashed chunks.
+  bigger tables would need hashed chunks. Tables without a primary key are compared as a
+  multiset of rows, so a rewritten row counts as rewritten but you don't get per-column samples.
 - **Lock timings reflect sandbox hardware**, so treat them as relative, not absolute.
 - **Migrations run as one transaction.** `CREATE INDEX CONCURRENTLY` and similar statements are refused.
 - **The ledger (`.gate/ledger.db`) is local.** Delete `.gate/` after re-seeding the demo DB.

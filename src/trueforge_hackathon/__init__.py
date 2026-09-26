@@ -9,6 +9,7 @@ from trueforge_hackathon.agents.migration_rehearsal.plugin import create_migrati
 from trueforge_hackathon.agents.umbrella.plugin import create_umbrella_plugin  # noqa: E402
 from trueforge_hackathon.registry import get_plugin, list_plugins, register_plugin  # noqa: E402
 
+load_env_file()
 register_plugin(create_access_reviewer_plugin())
 register_plugin(create_migration_rehearsal_plugin())
 register_plugin(create_cost_janitor_plugin())

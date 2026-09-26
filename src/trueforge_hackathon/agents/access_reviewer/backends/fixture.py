@@ -190,19 +190,31 @@ def revoke_access(principal_name: str, policy_name: str) -> dict:
 
 
 class FixtureBackend:
-    """In-memory IAM fixture. Returns the exact payloads the MCP tools always returned."""
+    """In-memory IAM fixture. Returns the exact payloads the MCP tools always returned.
+
+    `src` is any module exposing list_principals / get_principal / revoke_access with the
+    fixture's Principal shape (the advisor backend passes aws_iam).
+    """
 
     name = "fixture"
 
+    def __init__(self, src=None, name: str = "fixture", account=None) -> None:
+        import sys
+
+        self._src = src or sys.modules[__name__]
+        self.name = name
+        self._account = account or (lambda: "fixture")
+
     def list_principals(self) -> dict:
+        list_principals = self._src.list_principals
         return {
-            "account": "fixture",
+            "account": self._account(),
             "denyPrincipalPrefixes": deny_prefixes(),
             "principals": list_principals(),
         }
 
     def get_principal_policies(self, principal: str) -> dict:
-        found = get_principal(principal)
+        found = self._src.get_principal(principal)
         if found is None:
             return {"error": f"Unknown principal: {principal}"}
         return {
@@ -225,6 +237,7 @@ class FixtureBackend:
 
     def get_access_last_used(self, principal: str | None = None) -> dict:
         window = unused_after_days()
+        get_principal, list_principals = self._src.get_principal, self._src.list_principals
         targets = [get_principal(principal)] if principal else [get_principal(row["name"]) for row in list_principals()]
         rows: list[dict] = []
         for found in targets:
@@ -247,7 +260,7 @@ class FixtureBackend:
         return {"unusedAfterDays": window, "attachments": rows}
 
     def revoke_access(self, principal: str, policy: str) -> dict:
-        result = revoke_access(principal, policy)
+        result = self._src.revoke_access(principal, policy)
         if not result.get("ok"):
             return {"error": result.get("error")}
         detached = result["detached"]

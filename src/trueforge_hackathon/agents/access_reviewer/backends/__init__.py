@@ -1,4 +1,4 @@
-"""IAM backends for the access-reviewer MCP. IAM_BACKEND=fixture (default) | aws."""
+"""IAM backends for the access-reviewer MCP. IAM_BACKEND=fixture (default) | aws | advisor."""
 
 from __future__ import annotations
 
@@ -17,8 +17,14 @@ def get_backend():
         from trueforge_hackathon.agents.access_reviewer.backends.aws import AwsIamBackend
 
         return AwsIamBackend()
+    if name == "advisor":
+        # Live IAM via Access Advisor (aws_iam.py): the original four tools only.
+        from trueforge_hackathon.agents.access_reviewer import aws_iam
+        from trueforge_hackathon.agents.access_reviewer.backends.fixture import FixtureBackend
+
+        return FixtureBackend(src=aws_iam, name="advisor", account=aws_iam.account_id)
     if name == "fixture":
         from trueforge_hackathon.agents.access_reviewer.backends.fixture import FixtureBackend
 
         return FixtureBackend()
-    raise ValueError(f"IAM_BACKEND must be 'fixture' or 'aws', got {name!r}")
+    raise ValueError(f"IAM_BACKEND must be 'fixture', 'aws' or 'advisor', got {name!r}")

@@ -1,6 +1,6 @@
 # What we had to do, and what is in this repo
 
-This is the design-and-implementation record for the TrueFoundry × Polaris hackathon project **Agents That Act**, living in `/Users/nikhilkumarsingh/trueforge-hackathon` (sibling of `zynix`, not part of it).
+This is the design-and-implementation record for the TrueFoundry × Polaris hackathon project **Agents That Act**.
 
 Official brief: [truefoundry.com/truefoundry-hackathon#build](https://www.truefoundry.com/truefoundry-hackathon#build).  
 TrueForge docs: [trueforge.dev/introduction](https://trueforge.dev/introduction).
@@ -38,8 +38,6 @@ It does **not** come with IAM “list unused access / detach policy.” The [MCP
 - **Policy in the MCP** (deny break-glass), not a hope the model is careful.
 - Seed + run so someone else can clone and operate it.
 - Use TrueForge UI; do not write a second chat product.
-
-Zynix was **design reference only** (plugin registry, policy at the trust boundary). No Zynix code, PHI, or prod keys.
 
 ---
 
@@ -201,7 +199,7 @@ Operator  →  TrueForge UI or tf-run
 ### Intentionally not built
 
 - Custom agent loop, tool router, or “MCP gateway” in front of TrueForge
-- Zynix / healthcare / Service Bus / GraphQL
+- Healthcare / Service Bus / GraphQL
 - Secrets in git
 - A second chat UI
 - A Node copy of the adapter / MCP / seed (TrueForge server itself remains `npx`)
@@ -243,7 +241,7 @@ Try revoke on `BreakGlassAdmin` to show MCP policy (refused even if the model as
 | MCP | `src/trueforge_hackathon/agents/migration_rehearsal/gate_server.py` (`tf-gate`): `export_snapshot` (read-only role), `submit_rehearsal`, `apply_migration` (destructive), `migration_status` |
 | Skill pack | `skills/migration-rehearsal/` with `rehearse.py` (runs in the sandbox), `gatecore.py` (verdict rules shared with the gate), `setup_sandbox.sh` |
 | Demo data | `agents/migration_rehearsal/demo/` (`tf-gate-seed-demo`: synthetic Medicare ACO claims DB, no PHI) and three demo migrations |
-| Guard test | `tests/migration_rehearsal_e2e.py`: 23 checks (tampered reports, drift, stale rehearsals, rollback, …) |
+| Guard test | `tests/migration_rehearsal_e2e.py`: 27 checks (tampered reports, drift, stale rehearsals, rollback, …) |
 
 Policy lives in the gate, not the prompt: `apply_migration` refuses SQL that wasn't rehearsed, BLOCK verdicts, REVIEW without `accept_review`, schema drift, stale rehearsals, double applies and non-transactional statements, and rolls back when prod's post-apply schema differs from the rehearsal.
 

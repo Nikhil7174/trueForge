@@ -1,4 +1,4 @@
-# aws-hygiene: an AWS hygiene agent that knows when to stop
+# platform-guardian: an AWS hygiene agent that knows when to stop
 
 **Problem.** AWS accounts slowly fill with waste (unattached volumes, idle IPs, stale snapshots) and with roles holding far more access than they use. Cleanup is tedious and mistakes are irreversible, so it rarely happens. We delegate it to an agent that gathers evidence, does the arithmetic, and asks before every irreversible step.
 

@@ -14,11 +14,11 @@ from typing import Any
 from trueforge_hackathon.registry import get_plugin
 from trueforge_hackathon.types import AgentPlugin, AgentSpec, McpConnector, SkillRef
 
-DEFAULT_MEMBERS = "cost-janitor,access-reviewer"
+DEFAULT_MEMBERS = "cost-janitor,access-reviewer,migration-rehearsal"
 
 
 def umbrella_agent_name() -> str:
-    return os.environ.get("UMBRELLA_AGENT_NAME", "aws-hygiene").strip() or "aws-hygiene"
+    return os.environ.get("UMBRELLA_AGENT_NAME", "platform-guardian").strip() or "platform-guardian"
 
 
 def umbrella_members() -> list[str]:
