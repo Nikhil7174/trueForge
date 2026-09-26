@@ -12,3 +12,6 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .gate/
+
+# Local record of AWS resource IDs created by infra/seed.py
+infra/.seed-state.json
