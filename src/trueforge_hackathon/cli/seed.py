@@ -22,12 +22,14 @@ def _seed_mcp(client, plugin: AgentPlugin) -> None:
 
 def _seed_connector(client, mcp) -> None:
     headers = mcp.get("headers")
+    # Omit auth entirely for no-auth connectors: the server rejects an explicit null.
+    auth = {"auth": McpServerHeaderAuth(headers=headers)} if headers else {}
     client.settings.mcp_servers.create_or_update(
         manifest=RemoteMcpServerManifest(
             name=mcp["name"],
             url=mcp["url"],
             description=mcp.get("description", ""),
-            auth=McpServerHeaderAuth(headers=headers) if headers else None,
+            **auth,
         )
     )
     print(f"MCP connector: {mcp['name']} → {mcp['url']}")
