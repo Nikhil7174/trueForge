@@ -11,7 +11,7 @@ COST_JANITOR_MCP_NAME = "cost-janitor-aws"
 COST_JANITOR_SKILL_NAMES = ("cost-janitor", "aws-hygiene-ui")
 
 # Shared with other AWS hygiene plugins: the question contract must sit in the agent
-# instructions (the skill body loads lazily; see docs/spikes.md #11).
+# instructions: the skill body loads lazily, so a rule only there is applied too late.
 QUESTION_CONTRACT = "\n".join(
     [
         "Questions (ask_user_question), only after discovery:",
