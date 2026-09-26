@@ -19,6 +19,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import shutil
 import sqlite3
@@ -80,7 +81,7 @@ def ledger() -> sqlite3.Connection:
     db.executescript("""
     CREATE TABLE IF NOT EXISTS snapshots (
         snapshot_id TEXT PRIMARY KEY, target TEXT, fingerprint TEXT, dump_sha256 TEXT,
-        bytes INTEGER, taken_at TEXT);
+        bytes INTEGER, taken_at TEXT, server_version TEXT);
     CREATE TABLE IF NOT EXISTS rehearsals (
         rehearsal_id TEXT PRIMARY KEY, snapshot_id TEXT, target TEXT, migration_name TEXT,
         migration_sha256 TEXT, verdict TEXT, summary TEXT, reasons TEXT,
@@ -90,6 +91,9 @@ def ledger() -> sqlite3.Connection:
         id INTEGER PRIMARY KEY AUTOINCREMENT, rehearsal_id TEXT, migration_sha256 TEXT, target TEXT,
         status TEXT, detail TEXT, at TEXT);
     """)
+    cols = {r["name"] for r in db.execute("PRAGMA table_info(snapshots)")}
+    if "server_version" not in cols:
+        db.execute("ALTER TABLE snapshots ADD COLUMN server_version TEXT")
     return db
 
 
@@ -99,24 +103,52 @@ def refuse(reason: str, **extra) -> dict:
 
 # ---------------------------------------------------------------- export_snapshot
 
-def pg_dump_path() -> str:
+def _pg_dump_major(path: str) -> Optional[int]:
+    try:
+        out = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    m = re.search(r"(\d+)\.", out)
+    return int(m.group(1)) if m else None
+
+
+def pg_dump_path(server_major: int | None = None) -> str:
+    """A pg_dump at least as new as the server. An older one aborts with a version mismatch, and
+    the first pg_dump on PATH is often the wrong major (a stray Homebrew keg, an old client
+    package), so check rather than trust it."""
+    candidates: list[str] = []
     if os.environ.get("PG_DUMP"):
-        return os.environ["PG_DUMP"]
+        candidates.append(os.environ["PG_DUMP"])
     found = shutil.which("pg_dump")
     if found:
-        return found
+        candidates.append(found)
     try:
-        import pgserver  # bundled PG16 binaries as a fallback
-        return str(Path(pgserver.__file__).parent / "pginstall" / "bin" / "pg_dump")
+        import pgserver  # bundled PG16 binaries
+        candidates.append(str(Path(pgserver.__file__).parent / "pginstall" / "bin" / "pg_dump"))
     except ImportError:
+        pass
+    if not candidates:
         raise RuntimeError("pg_dump not found; install PostgreSQL client tools or set PG_DUMP")
+    if server_major is None:
+        return candidates[0]
+    seen = []
+    for path in candidates:
+        major = _pg_dump_major(path)
+        seen.append(f"{path} ({major or 'unknown'})")
+        if major is None or major >= server_major:
+            return path
+    raise RuntimeError(
+        f"every pg_dump found is older than the server (PostgreSQL {server_major}): {', '.join(seen)}. "
+        f"Install postgresql-client-{server_major} or set PG_DUMP to a matching binary.")
 
 
 def _export_snapshot() -> str:
     with psycopg.connect(READER_URL) as c:
         fp = gatecore.fingerprint(c)
+        server_version = str(c.execute("SHOW server_version").fetchone()[0])
     p = subprocess.run(
-        [pg_dump_path(), "--format=plain", "--schema=public", "--no-owner", "--no-privileges",
+        [pg_dump_path(int(str(server_version).split(".")[0])),
+         "--format=plain", "--schema=public", "--no-owner", "--no-privileges",
          "--no-publications", "--no-subscriptions", "--no-security-labels", "--dbname", READER_URL],
         capture_output=True, timeout=600)
     if p.returncode != 0:
@@ -132,14 +164,25 @@ def _export_snapshot() -> str:
         "dump_sha256": hashlib.sha256(dump).hexdigest(),
         "bytes": len(dump),
         "taken_at": now().isoformat(),
+        "server_version": server_version,
         "format": "pg_dump plain | gzip | base64",
     }
     with ledger() as db:
-        db.execute("INSERT INTO snapshots VALUES (?,?,?,?,?,?)",
-                   (header["snapshot_id"], header["target_database"], fp, header["dump_sha256"],
-                    len(dump), header["taken_at"]))
+        db.execute(
+            "INSERT INTO snapshots (snapshot_id, target, fingerprint, dump_sha256, bytes, taken_at, "
+            "server_version) VALUES (?,?,?,?,?,?,?)",
+            (header["snapshot_id"], header["target_database"], fp, header["dump_sha256"],
+             len(dump), header["taken_at"], server_version))
     payload = base64.b64encode(gzip.compress(dump, compresslevel=6)).decode()
     return "RELEASE-GATE-SNAPSHOT v1 " + json.dumps(header) + "\n" + payload
+
+
+def _major(version: str | None) -> str | None:
+    """Postgres major from a version string or an `engine` label. Tolerates b'16.15' reprs."""
+    if not version:
+        return None
+    m = re.search(r"(\d+)", str(version).replace("b'", "").replace('b"', ""))
+    return m.group(1) if m else None
 
 
 # ---------------------------------------------------------------- submit_rehearsal
@@ -162,6 +205,19 @@ def _submit_rehearsal(report_json: str) -> dict:
             or report.get("snapshot_dump_sha256") != snap["dump_sha256"]
             or report.get("target_database") != snap["target"]):
         return {"accepted": False, "reason": "report does not match the snapshot the gate issued"}
+
+    # The sandbox engine must be the same Postgres major as production. rehearse.py checks the
+    # restored schema fingerprint, but that check lives in the sandbox where it can be edited out,
+    # so the gate re-checks here where the agent cannot reach it.
+    prod_major, sandbox_major = _major(snap["server_version"]), _major(report.get("engine"))
+    if prod_major and sandbox_major and prod_major != sandbox_major:
+        return {"accepted": False,
+                "reason": (f"rehearsal ran on PostgreSQL {sandbox_major} but production is "
+                           f"PostgreSQL {prod_major}; a rehearsal on a different major version does "
+                           f"not prove what the migration does to production. Install a matching "
+                           f"major in the sandbox and rehearse again."),
+                "production_server_version": snap["server_version"],
+                "rehearsal_engine": report.get("engine")}
 
     findings = report.get("findings") or {}
     verdict, reasons = gatecore.compute_verdict(findings)

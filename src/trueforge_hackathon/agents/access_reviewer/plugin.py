@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import os
 
-from trueforge_hackathon.agents.access_reviewer.store import deny_prefixes
+from trueforge_hackathon.agents.access_reviewer.store import (
+    deny_prefixes,
+    demo_revoke_principal,
+    use_aws,
+)
 from trueforge_hackathon.skill_catalog import resolve_skills
 from trueforge_hackathon.types import AgentPlugin, AgentSpec
 
@@ -21,6 +25,12 @@ def _instructions() -> str:
             "You are an access reviewer for one AWS account (or the local IAM fixture).",
             "Job: list principals, find unused or over-broad policy attachments, draft a least-privilege diff, and revoke nothing alone.",
             f"Never propose or attempt revoke on principals whose names start with: {deny}.",
+            (
+                f"Live AWS is enabled. revoke_access is allowed only for {demo_revoke_principal()}. "
+                "Do not ask to revoke any other principal."
+                if use_aws()
+                else "This session may be the local IAM fixture if AWS credentials are unset."
+            ),
             "Use list_principals, get_principal_policies, and get_access_last_used first.",
             "Load the access-review-playbook and blast-radius skills when they are attached. Follow them instead of inventing procedure.",
             "Compute the unused set in the sandbox / Code Mode. Do not invent last-used dates or diffs.",

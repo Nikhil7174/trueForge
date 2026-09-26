@@ -27,6 +27,14 @@ SKILL_CATALOG: list[SkillRef] = [
         "path": "skills/migration-rehearsal",
     },
     {
+        "name": "release-captain",
+        "description": (
+            "Scope a release from its commits, verify the build in the sandbox, draft notes, and "
+            "publish only through the gate - which refuses while any migration is unapplied."
+        ),
+        "path": "skills/release-captain",
+    },
+    {
         "name": "ticket-resolver",
         "description": (
             "Reproduce a Linear bug ticket against the product code in the sandbox, prove any fix with repros and "

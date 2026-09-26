@@ -4,7 +4,7 @@ import sys
 
 
 def main() -> None:
-    usage = "usage: python -m trueforge_hackathon {mcp|gate|ticket-gate|ticket-trigger|seed|run} ..."
+    usage = "usage: python -m trueforge_hackathon {mcp|gate|ship|ticket-gate|ticket-trigger|seed|run} ..."
     if len(sys.argv) < 2:
         raise SystemExit(usage)
     command, rest = sys.argv[1], sys.argv[2:]
@@ -18,6 +18,11 @@ def main() -> None:
         from trueforge_hackathon.agents.migration_rehearsal.gate_server import main as gate_main
 
         gate_main()
+        return
+    if command == "ship":
+        from trueforge_hackathon.agents.release_captain.ship_gate import main as ship_main
+
+        ship_main()
         return
     if command == "ticket-gate":
         from trueforge_hackathon.agents.ticket_resolver.gate_server import main as ticket_gate_main
