@@ -31,6 +31,8 @@ class AgentPlugin(TypedDict):
     description: str
     manifest: AgentSpec
     mcp: NotRequired[McpConnector]
+    # Additional connectors (e.g. a catalog GitHub MCP). Seeded alongside `mcp`.
+    mcps: NotRequired[list[McpConnector]]
     skills: NotRequired[list[SkillRef]]
     policy: NotRequired[dict[str, Any]]
     default_message: NotRequired[str]

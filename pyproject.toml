@@ -23,8 +23,14 @@ dev = [
   "pytest>=8",
 ]
 
+# AWS hygiene: infra/ scripts and the live IAM / cost-janitor backends
+aws = [
+  "boto3>=1.34",
+]
+
 [project.scripts]
 tf-mcp = "trueforge_hackathon.agents.access_reviewer.mcp_server:main"
+tf-cost-mcp = "trueforge_hackathon.agents.cost_janitor.mcp_server:main"
 tf-gate = "trueforge_hackathon.agents.migration_rehearsal.gate_server:main"
 tf-ship = "trueforge_hackathon.agents.release_captain.ship_gate:main"
 tf-gate-seed-demo = "trueforge_hackathon.agents.migration_rehearsal.demo.seed:main"
