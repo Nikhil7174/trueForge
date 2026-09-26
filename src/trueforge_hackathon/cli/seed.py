@@ -15,9 +15,12 @@ from trueforge_hackathon.types import AgentPlugin
 
 
 def _seed_mcp(client, plugin: AgentPlugin) -> None:
-    mcp = plugin.get("mcp")
-    if not mcp:
-        return
+    connectors = ([plugin["mcp"]] if plugin.get("mcp") else []) + list(plugin.get("mcps", []))
+    for mcp in connectors:
+        _seed_connector(client, mcp)
+
+
+def _seed_connector(client, mcp) -> None:
     headers = mcp.get("headers")
     client.settings.mcp_servers.create_or_update(
         manifest=RemoteMcpServerManifest(

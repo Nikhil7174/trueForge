@@ -26,6 +26,22 @@ SKILL_CATALOG: list[SkillRef] = [
         ),
         "path": "skills/migration-rehearsal",
     },
+    {
+        "name": "cost-janitor",
+        "description": (
+            "Find AWS waste (unattached EBS, idle Elastic IPs, orphaned snapshots, stopped instances), "
+            "price it live, back up, and remove it only with human approval and a GitHub audit trail."
+        ),
+        "path": "skills/cost-janitor",
+    },
+    {
+        "name": "aws-hygiene-ui",
+        "description": (
+            "Card and question contract for AWS hygiene: fixed OpenUI shapes for findings, cost, plan, "
+            "policy diff, blast radius, pre-approval and outcome, plus the ask_user_question rules."
+        ),
+        "path": "skills/aws-hygiene-ui",
+    },
 ]
 
 
