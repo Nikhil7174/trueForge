@@ -15,3 +15,5 @@ __pycache__/
 
 # Local record of AWS resource IDs created by infra/seed.py
 infra/.seed-state.json
+# Linear router: issue → TrueForge session map
+.linear-state.json

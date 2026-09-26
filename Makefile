@@ -1,6 +1,6 @@
 PY ?= .venv/bin/python
 
-.PHONY: seed teardown doctor mcp-cost mcp-iam agent
+.PHONY: seed teardown doctor mcp-cost mcp-iam agent linear
 
 # Create the us-west-2 resources the hygiene agent works on (idempotent).
 seed:
@@ -24,3 +24,7 @@ mcp-iam:
 # Register skills, connectors and the umbrella agent in TrueForge.
 agent:
 	IAM_BACKEND=$${IAM_BACKEND:-aws} $(PY) -c "import trueforge_hackathon; from trueforge_hackathon.agents.umbrella.plugin import umbrella_agent_name; from trueforge_hackathon.cli.seed import main; main([umbrella_agent_name()])"
+
+# Route Linear issues labelled LINEAR_TRIGGER_LABEL to the agent (polls every 20 s).
+linear:
+	.venv/bin/tf-linear --watch
