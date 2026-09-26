@@ -1,4 +1,8 @@
-"""tf-ticket-trigger: starts a ticket-resolver session in TrueForge when a bug ticket appears in Linear.
+"""tf-ticket-trigger: the single Linear entry point. Starts a platform-guardian session when a routed ticket appears.
+
+Routing is by label (LINEAR_ROUTES, default Bug=ticket-resolver, cloudcost=cost-janitor, iam-review=access-reviewer,
+migration=migration-rehearsal, release=release-captain). Status goes back on the ticket through the Agent label
+group (Working, Awaiting approval, Replied, Declined, Failed). Bug tickets keep the ticket-gate flow unchanged.
 
   tf-ticket-trigger                          serve: webhook endpoint + poll backstop (TRIGGER_MODE=both)
   tf-ticket-trigger register-webhook <url>   create/update the Linear webhook, e.g. https://<tunnel>/linear/webhook
@@ -27,11 +31,22 @@ from trueforge_hackathon.env import load_env_file
 load_env_file()
 
 from trueforge_hackathon.adapter.client import create_trueforge_client  # noqa: E402
-from trueforge_hackathon.adapter.run_session import create_agent_session, run_agent_message  # noqa: E402
+from trueforge_hackathon.adapter.run_session import create_agent_session, pending_actions, run_agent_message  # noqa: E402
+from trueforge_hackathon.agents.umbrella.plugin import umbrella_agent_name  # noqa: E402
 from trueforge_hackathon.agents.ticket_resolver import gate_server as gate  # noqa: E402
 from trueforge_hackathon.agents.ticket_resolver.linear import LinearError  # noqa: E402
 
-AGENT_NAME = "ticket-resolver"
+# One platform agent; the label picks the job inside it.
+AGENT_NAME = os.environ.get("TRIGGER_AGENT_NAME") or umbrella_agent_name()
+BUG_JOB = "ticket-resolver"
+ROUTES = {
+    k.strip().lower(): v.strip()
+    for k, v in (pair.split("=", 1) for pair in os.environ.get(
+        "LINEAR_ROUTES",
+        f"{os.environ.get('LINEAR_TRIGGER_LABEL', 'Bug')}={BUG_JOB},cloudcost=cost-janitor,iam-review=access-reviewer,"
+        "migration=migration-rehearsal,release=release-captain",
+    ).split(",") if "=" in pair)
+}
 MODE = os.environ.get("TRIGGER_MODE", "both")
 POLL_SECONDS = float(os.environ.get("TRIGGER_POLL_SECONDS", "60"))
 MAX_CONCURRENT = int(os.environ.get("TRIGGER_MAX_CONCURRENT", "2"))
@@ -72,26 +87,127 @@ def set_status(ident: str, status: str, session_id: str | None = None, detail: s
                    "updated_at = ? WHERE issue = ?", (status, session_id, detail, now_iso(), ident))
 
 
+def route_for(issue: dict) -> tuple[str, str] | None:
+    """(label, job) for the first routed label on the ticket."""
+    for name in (n["name"] for n in issue["labels"]["nodes"]):
+        if name.lower() in ROUTES:
+            return name, ROUTES[name.lower()]
+    return None
+
+
+def route_problem(issue: dict) -> str | None:
+    names = [n["name"].lower() for n in issue["labels"]["nodes"]]
+    if issue["team"]["key"] != gate.TEAM_KEY:
+        return f"{issue['identifier']} is in team {issue['team']['key']}, not {gate.TEAM_KEY}"
+    if gate.SKIP_LABEL.lower() in names:
+        return f"{issue['identifier']} is labelled {gate.SKIP_LABEL}"
+    route = route_for(issue)
+    if route is None:
+        return f"{issue['identifier']} has no routed label ({', '.join(ROUTES)})"
+    if route[1] == BUG_JOB:
+        return gate.scope_problem(issue)  # the ticket-gate's own checks, unchanged
+    return None
+
+
 def message_for(issue: dict) -> str:
-    return (f"Resolve {issue['identifier']}. This session was started automatically by the trigger because the "
-            f"ticket was filed with the {gate.TRIGGER_LABEL} label. Run the whole job and finish by calling "
-            "reply_to_customer, so a person can approve or deny the reply.")
+    label, job = route_for(issue) or (gate.TRIGGER_LABEL, BUG_JOB)
+    if job == BUG_JOB:
+        return (f"Resolve {issue['identifier']}. This session was started automatically by the trigger because the "
+                f"ticket was filed with the {gate.TRIGGER_LABEL} label. Do the {BUG_JOB} job: run the whole job "
+                "and finish by calling reply_to_customer, so a person can approve or deny the reply.")
+    return (f"Linear ticket {issue['identifier']} was labelled '{label}', so do the {job} job for it.\n\n"
+            f"Title: {issue['title']}\n\n{issue.get('description') or ''}\n\n"
+            "Questions and approvals are answered by a person in this TrueForge session. "
+            "End with a short summary of the outcome; it is posted back to the ticket.")
+
+
+def _jobs_path():
+    return gate.STATE_DIR / "trigger_jobs.json"
+
+
+def _jobs() -> dict:
+    path = _jobs_path()
+    return json.loads(path.read_text()) if path.exists() else {}
+
+
+def _remember(ident: str, **fields) -> None:
+    jobs = _jobs()
+    jobs.setdefault(ident, {}).update(fields)
+    _jobs_path().parent.mkdir(parents=True, exist_ok=True)
+    _jobs_path().write_text(json.dumps(jobs, indent=2))
+
+
+def _last_output(client, session_id: str) -> str:
+    for turn in sorted(client.sessions.list_turns(session_id=session_id, limit=25),
+                       key=lambda t: str(getattr(t, "created_at", "")), reverse=True):
+        content = getattr(getattr(getattr(turn, "state", None), "output", None), "content", None)
+        if content:
+            return content if isinstance(content, str) else str(content)
+    return "(no final text)"
+
+
+def report_back(issue: dict, session_id: str, client) -> str:
+    """Non-Bug jobs: mirror the session state onto the ticket (comment + Agent label). Returns the new status."""
+    approvals, questions = pending_actions(client, session_id)
+    if approvals or questions:
+        lines = [f"**{AGENT_NAME} is waiting for you** in TrueForge session `{session_id}` ({UI_URL}):"]
+        lines += [f"- Question: {q.question}" for q in questions]
+        lines += [f"- Approval: `{a.tool_name}` {a.arguments[:400]}" for a in approvals]
+        linear.create_comment(issue["id"], "\n".join(lines))
+        gate.set_label(issue, gate.AGENT_GROUP, "Awaiting approval")
+        return "awaiting_approval" if approvals else "awaiting_answer"
+    output = _last_output(client, session_id)
+    declined = any(w in output.lower() for w in ("denied", "declined"))
+    linear.create_comment(issue["id"], f"**{AGENT_NAME} finished.**\n\n{output[:60000]}\n\nSession `{session_id}`")
+    gate.set_label(issue, gate.AGENT_GROUP, "Declined" if declined else "Replied")
+    return "declined" if declined else "finished"
+
+
+def followup_once() -> None:
+    """Paused non-Bug sessions: once the person has answered in TrueForge, post the outcome to the ticket."""
+    client = None
+    for ident, job in _jobs().items():
+        if job.get("job") == BUG_JOB or job.get("status") not in ("awaiting_approval", "awaiting_answer"):
+            continue
+        client = client or create_trueforge_client()
+        approvals, questions = pending_actions(client, job["session_id"])
+        if approvals or questions:
+            continue
+        status = report_back(linear.issue(ident), job["session_id"], client)
+        _remember(ident, status=status)
+        set_status(ident, status)
+        log(f"{ident}: {status} (after the person answered in TrueForge)")
 
 
 def run_session(issue: dict):
     ident = issue["identifier"]
+    job = (route_for(issue) or ("", BUG_JOB))[1]
     with _slots:
         try:
             client = create_trueforge_client()
             session_id = create_agent_session(client, {"name": AGENT_NAME})
             set_status(ident, "running", session_id)
-            log(f"{ident}: session {session_id} started ({UI_URL})")
+            _remember(ident, job=job, session_id=session_id, status="running")
+            log(f"{ident}: {job} session {session_id} started on {AGENT_NAME} ({UI_URL})")
+            if job != BUG_JOB:
+                linear.create_comment(issue["id"], f"Picked up by **{AGENT_NAME}** ({job}). "
+                                                   f"TrueForge session `{session_id}` at {UI_URL}")
             result = run_agent_message(client, message=message_for(issue), session_id=session_id)
         except Exception as exc:  # noqa: BLE001  a failed run must not kill the trigger
             set_status(ident, "failed", detail=str(exc)[:500])
             label_error = gate.set_label(issue, gate.AGENT_GROUP, "Failed")
             log(f"{ident}: FAILED: {exc}" + (f" (label not set: {label_error})" if label_error else ""))
             return
+    if job != BUG_JOB:
+        try:
+            status = report_back(issue, session_id, client)
+        except Exception as exc:  # noqa: BLE001
+            status = "failed"
+            log(f"{ident}: could not report back: {exc}")
+        _remember(ident, status=status)
+        set_status(ident, status)
+        log(f"{ident}: {job} {status}")
+        return
     if result.pending_approvals:
         set_status(ident, "awaiting_approval", detail=", ".join(p.tool_name for p in result.pending_approvals))
         log(f"{ident}: paused for approval ({', '.join(p.tool_name for p in result.pending_approvals)}); "
@@ -111,7 +227,7 @@ def dispatch(issue_ref: str, source: str) -> str:
     except LinearError as e:
         log(f"{source}: can't read {issue_ref}: {e}")
         return "unreadable"
-    problem = gate.scope_problem(issue)
+    problem = route_problem(issue)
     if problem:
         return f"skipped: {problem}"
     if not claim(issue):
@@ -141,9 +257,8 @@ def verify_webhook(body: bytes, signature: str | None, now_ms: float | None = No
     return None
 
 
-def trigger_label_id() -> str | None:
-    return linear.labels().get((None, gate.TRIGGER_LABEL)) or next(
-        (i for (_, n), i in linear.labels().items() if n.lower() == gate.TRIGGER_LABEL.lower()), None)
+def routed_label_ids() -> set[str]:
+    return {i for (_, n), i in linear.labels().items() if n.lower() in ROUTES}
 
 
 def wants(payload: dict) -> bool:
@@ -151,13 +266,13 @@ def wants(payload: dict) -> bool:
     if payload.get("type") != "Issue":
         return False
     data = payload.get("data") or {}
-    label_id = trigger_label_id()
-    has_label = label_id in (data.get("labelIds") or [])
+    routed = routed_label_ids()
+    now_ids = set(data.get("labelIds") or [])
     if payload.get("action") == "create":
-        return has_label
+        return bool(now_ids & routed)
     if payload.get("action") == "update":
         before = (payload.get("updatedFrom") or {}).get("labelIds")
-        return has_label and before is not None and label_id not in before
+        return before is not None and bool((now_ids - set(before)) & routed)
     return False
 
 
@@ -185,7 +300,7 @@ def make_app():
         with gate.ledger() as db:
             rows = [dict(r) for r in db.execute(
                 "SELECT issue, status, session_id, updated_at FROM triggered_issues ORDER BY triggered_at DESC LIMIT 20")]
-        return JSONResponse({"ok": True, "mode": MODE, "team": gate.TEAM_KEY, "label": gate.TRIGGER_LABEL,
+        return JSONResponse({"ok": True, "mode": MODE, "team": gate.TEAM_KEY, "routes": ROUTES,
                              "recent": rows})
 
     return Starlette(routes=[Route("/linear/webhook", webhook, methods=["POST"]), Route("/healthz", healthz)])
@@ -209,11 +324,16 @@ def poll_once() -> list[str]:
     if not path.exists():  # first start: only tickets filed from now on, never a backlog
         path.write_text(linear_ts(dt.datetime.now(dt.timezone.utc)))
     since = path.read_text().strip()
-    results = []
-    for issue in linear.issues_created_since(since, gate.TRIGGER_LABEL):
-        results.append(dispatch(issue["id"], "poll"))
-        since = max(since, issue["createdAt"])
-        path.write_text(since)
+    results, newest = [], since
+    seen: set[str] = set()
+    for label in ROUTES:
+        for issue in linear.issues_created_since(since, label):
+            if issue["id"] in seen:
+                continue
+            seen.add(issue["id"])
+            results.append(dispatch(issue["id"], "poll"))
+            newest = max(newest, issue["createdAt"])
+    path.write_text(newest)
     return results
 
 
@@ -222,7 +342,7 @@ def poll_forever():
         poll_once()  # sets the cursor on first start
     except LinearError as e:
         log(f"poll: {e}")
-    log(f"poll: every {POLL_SECONDS:.0f}s for {gate.TEAM_KEY} tickets labelled {gate.TRIGGER_LABEL} "
+    log(f"poll: every {POLL_SECONDS:.0f}s for {gate.TEAM_KEY} tickets routed by {ROUTES} to {AGENT_NAME} "
         f"created after {cursor_path().read_text().strip()}")
     while True:
         time.sleep(POLL_SECONDS)
@@ -230,7 +350,8 @@ def poll_forever():
             for result in poll_once():
                 if result.startswith("started"):
                     log(f"poll: {result}")
-        except LinearError as e:
+            followup_once()
+        except Exception as e:  # noqa: BLE001  keep polling
             log(f"poll: {e}")
 
 
@@ -283,7 +404,7 @@ def serve():
 
 
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(description="Start ticket-resolver sessions for new Linear bug tickets.")
+    parser = argparse.ArgumentParser(description="Start platform-guardian sessions for routed Linear tickets.")
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("serve", help="webhook endpoint + poll backstop (default)")
     reg = sub.add_parser("register-webhook", help="create or update the Linear webhook")

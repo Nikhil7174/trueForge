@@ -25,6 +25,7 @@ mcp-iam:
 agent:
 	IAM_BACKEND=$${IAM_BACKEND:-aws} $(PY) -c "import trueforge_hackathon; from trueforge_hackathon.agents.umbrella.plugin import umbrella_agent_name; from trueforge_hackathon.cli.seed import main; main([umbrella_agent_name()])"
 
-# Route Linear issues labelled LINEAR_TRIGGER_LABEL to the agent (polls every 20 s).
+# The single Linear entry point: routes labelled tickets (LINEAR_ROUTES) to platform-guardian.
+# Poll-only by default; set TRIGGER_MODE=both and LINEAR_WEBHOOK_SECRET to also accept webhooks.
 linear:
-	.venv/bin/tf-linear --watch
+	TRIGGER_MODE=$${TRIGGER_MODE:-poll} TRIGGER_POLL_SECONDS=$${TRIGGER_POLL_SECONDS:-20} .venv/bin/tf-ticket-trigger

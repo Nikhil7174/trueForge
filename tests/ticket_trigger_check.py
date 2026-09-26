@@ -88,7 +88,7 @@ check("in-scope ticket starts a session", res == "started ZYN-10" and started ==
 check("ticket labelled Agent → Working", fake.group_label("ZYN-10", "Agent") == "Working")
 check("second delivery of the same ticket is deduped", tr.dispatch("ZYN-10", "webhook").endswith("already triggered"))
 check("poller finding it by UUID is deduped too", tr.dispatch("uuid-ZYN-10", "poll").endswith("already triggered"))
-check("ticket without Bug label skipped", "no Bug label" in tr.dispatch("ZYN-11", "webhook"))
+check("ticket without a routed label skipped", "no routed label" in tr.dispatch("ZYN-11", "webhook"))
 check("agent-skip ticket skipped", "agent-skip" in tr.dispatch("ZYN-12", "webhook"))
 check("unknown ticket doesn't crash", tr.dispatch("ZYN-404", "webhook") == "unreadable")
 check("only one session started in total", started == ["ZYN-10"], started)
