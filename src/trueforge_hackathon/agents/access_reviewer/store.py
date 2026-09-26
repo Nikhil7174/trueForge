@@ -153,6 +153,10 @@ def is_unused(last_used_at: str | None, window_days: int | None = None) -> bool:
     return datetime.fromisoformat(last_used_at) < cutoff
 
 
+def access_status(last_used_at: str | None, window_days: int | None = None) -> str:
+    return "inactive" if is_unused(last_used_at, window_days) else "active"
+
+
 def deny_prefixes() -> list[str]:
     raw = os.environ.get(
         "DENY_PRINCIPAL_PREFIXES",

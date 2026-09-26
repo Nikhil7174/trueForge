@@ -16,6 +16,7 @@ from trueforge_hackathon.agents.access_reviewer.store import (
     demo_revoke_principal,
     get_principal,
     is_denied_principal,
+    access_status,
     is_unused,
     list_principals,
     revoke_access,
@@ -101,6 +102,8 @@ def get_principal_policies(principal: str) -> str:
                     "name": policy.name,
                     "arn": policy.arn,
                     "lastUsedAt": policy.last_used_at,
+                    "status": access_status(policy.last_used_at),
+                    "unused": is_unused(policy.last_used_at),
                     "unusedServices": policy.unused_services,
                     "blastRadius": policy.blast_radius,
                 }
@@ -112,7 +115,7 @@ def get_principal_policies(principal: str) -> str:
 
 @mcp.tool(
     name="get_access_last_used",
-    description="Return last-used timestamps and which attachments are unused for the review window. Read-only.",
+    description="Return last-used timestamps split into active (used within the window) and inactive (unused). Read-only.",
     annotations=ToolAnnotations(
         title="Get access last used",
         read_only_hint=True,
@@ -137,6 +140,7 @@ def get_access_last_used(principal: str | None = None) -> str:
         if found is None:
             continue
         for policy in found.policies:
+            unused = is_unused(policy.last_used_at, window)
             rows.append(
                 {
                     "principal": found.name,
@@ -144,13 +148,23 @@ def get_access_last_used(principal: str | None = None) -> str:
                     "policy": policy.name,
                     "arn": policy.arn,
                     "lastUsedAt": policy.last_used_at,
-                    "unused": is_unused(policy.last_used_at, window),
+                    "status": "inactive" if unused else "active",
+                    "unused": unused,
                     "unusedServices": policy.unused_services,
                     "blastRadius": policy.blast_radius,
                     "deniedPrincipal": is_denied_principal(found.name),
                 }
             )
-    return _dump({"unusedAfterDays": window, "attachments": rows})
+    active = [row for row in rows if row["status"] == "active"]
+    inactive = [row for row in rows if row["status"] == "inactive"]
+    return _dump(
+        {
+            "unusedAfterDays": window,
+            "active": active,
+            "inactive": inactive,
+            "attachments": rows,
+        }
+    )
 
 
 @mcp.tool(

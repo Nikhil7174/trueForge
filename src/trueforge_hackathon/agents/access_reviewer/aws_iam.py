@@ -202,22 +202,55 @@ def _principal_from_aws(
 ) -> Principal:
     attached = _attached_policies(client, user=name if kind == "user" else None, role=name if kind == "role" else None)
     advisor = _service_last_accessed(client, arn) if attached else []
+    key_ts, key_svc = _access_key_activity(client, name) if kind == "user" else (None, None)
     policies: list[AttachedPolicy] = []
     for item in attached:
         policy_arn = item["PolicyArn"]
         policy_name = item["PolicyName"]
         services = _services_from_policy_doc(_policy_document(client, policy_arn))
         last_used, unused = _policy_usage(advisor, services)
+        blast = _blast_radius(name, policy_name, unused)
+        # Access Advisor is empty on this account. Key last-used proves the
+        # caller is alive; only star/admin policies count as covering that call.
+        if (
+            last_used is None
+            and key_ts
+            and key_svc
+            and ("*" in services or "admin" in policy_name.lower())
+        ):
+            last_used = key_ts
+            unused = [item for item in unused if item.lower() != key_svc]
+            blast = (
+                f"{policy_name} is active: access key last called {key_svc} at {key_ts}. "
+                "Do not revoke this for idle cleanup."
+            )
         policies.append(
             AttachedPolicy(
                 name=policy_name,
                 arn=policy_arn,
                 unused_services=unused,
                 last_used_at=last_used,
-                blast_radius=_blast_radius(name, policy_name, unused),
+                blast_radius=blast,
             )
         )
     return Principal(id=principal_id, name=name, kind=kind, tags=tags, policies=policies)  # type: ignore[arg-type]
+
+
+def _access_key_activity(client, user: str) -> tuple[str | None, str | None]:
+    latest: str | None = None
+    service: str | None = None
+    for meta in _paginate(client, "list_access_keys", "AccessKeyMetadata", UserName=user):
+        try:
+            used = client.get_access_key_last_used(AccessKeyId=meta["AccessKeyId"]).get(
+                "AccessKeyLastUsed"
+            ) or {}
+        except ClientError:
+            continue
+        ts = _iso(used.get("LastUsedDate"))
+        if ts and (latest is None or ts > latest):
+            latest = ts
+            service = (used.get("ServiceName") or "").lower() or None
+    return latest, service
 
 
 def list_principals() -> list[dict]:

@@ -37,10 +37,11 @@ Only the printed table enters context.
 
 Use Generative UI (table + cards) when available:
 
-- Unused access table
+- Active table (used within 90 days — keep)
+- Inactive table (unused — candidates to revoke)
 - One card per proposed revocation (use the `blast-radius` skill for how to write the card)
 
-Ask a clarifying question only if two principals match or the operator did not say which unused policy to revoke.
+Ask which inactive policy to revoke. Do not propose revoking an active policy.
 
 ## Stop
 
