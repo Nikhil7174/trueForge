@@ -1,55 +1,71 @@
-# platform-guardian: an AWS hygiene agent on TrueForge
+# platform-guardian: one platform agent on TrueForge
 
-One agent that does two jobs a platform team rarely has time for, on a **live AWS account**:
+One TrueForge agent, **platform-guardian**, does five jobs a platform team rarely has time for. Every task starts as a **Linear ticket**; its **label** picks the job. Every irreversible step pauses on TrueForge's native approval.
 
-- **Cost janitor**: finds resources that cost money for nothing (unattached EBS volumes, idle Elastic IPs, orphaned snapshots, stopped instances). It proves each one with evidence, prices it live from the AWS Price List API, backs it up, and deletes it only after a human approves that specific resource.
-- **Access reviewer**: reviews IAM roles for least privilege, using the roles' actual policies, IAM service-last-accessed data and CloudTrail. It builds and lints a least-privilege policy in the sandbox and changes nothing without approval. It also respects a "no".
+| Linear label | Job (plugin) | What it does | Gate (literal tool names) | Built by |
+|---|---|---|---|---|
+| `cloudcost` | **cost-janitor** | Finds AWS waste (unattached EBS, idle Elastic IPs, orphaned snapshots, stopped instances), proves it with evidence, prices it live, backs it up, deletes only per-resource with approval | `delete_volume`, `release_elastic_ip`, `delete_snapshot`, `terminate_instance` | Sai |
+| `iam-review` | **access-reviewer** | IAM least privilege. `IAM_BACKEND=aws`: CloudTrail + last-accessed evidence, subagents, sandbox policy synthesis and lint. `advisor`: Access Advisor review. `fixture`: tests | `revoke_access`, `detach_role_policy`, `put_role_policy` | Nikhil (template, fixture, advisor) · Sai (aws backend) |
+| `migration` | **migration-rehearsal** | Restores prod into the sandbox, runs the migration, diffs every row, SAFE / REVIEW / BLOCK verdict ([docs](docs/migration-rehearsal.md)) | `apply_migration` | Nikhil |
+| `release` | **release-captain** | Scopes a release, verifies the build in the sandbox, drafts notes, refuses to publish while a migration is unapplied ([docs](docs/release-captain.md)) | `publish_release` | Nikhil |
+| `Bug` | **ticket-resolver** | Reproduces a bug ticket against the product code in the sandbox, proves any fix, replies to the customer only through the gate | `reply_to_customer` | Nikhil |
 
-TrueForge runs the agent loop. This repo supplies the MCP tools, the skills, the policy and the approval boundary.
+Shared by all jobs: the **umbrella plugin** that merges the five into one agent, the **single Linear trigger** that routes by label, the **`aws-hygiene-ui` card contract** (Generative UI), and the `infra/` AWS scripts (Sai). The adapter, plugin registry, skill catalog and `tf-seed` come from Nikhil's original template.
 
-| Plugin | Job | Gate (literal tool names) |
-|---|---|---|
-| **platform-guardian** (umbrella) | One agent merging the members below (`UMBRELLA_MEMBERS`) | union of the members' gates |
-| **cost-janitor** | AWS waste: discover → evidence → price → back up → delete | `delete_volume`, `release_elastic_ip`, `delete_snapshot`, `terminate_instance` |
-| **access-reviewer** | IAM least privilege (`IAM_BACKEND=aws`, or `fixture` for tests) | `revoke_access`, `detach_role_policy`, `put_role_policy` |
-| **migration-rehearsal** | Postgres migration rehearsal ([docs](docs/migration-rehearsal.md)); optional umbrella member | `apply_migration` |
-| **release-captain** | Read the commits since the last tag, run the tests in a sandbox, draft release notes - and refuse to publish while any migration in the release is unapplied. Setup and demo: [docs/release-captain.md](docs/release-captain.md) | `publish_release` |
+```text
+Linear ticket (team ZYN) + routing label
+  │  status on the ticket via the Agent label group:
+  │  Working → Awaiting approval → Replied / Declined / Failed
+  ▼
+tf-ticket-trigger (make linear)          one entry point, poll and/or webhook, deduped
+  ▼
+TrueForge :8790 ── platform-guardian     one agent; questions and approvals answered in the UI
+  ├─ cost-janitor-aws   :8766 ─ AWS EC2/EBS, CloudTrail, Price List
+  ├─ access-reviewer-iam :8765 ─ AWS IAM, CloudTrail
+  ├─ db-gate            :8811 ─ Postgres
+  ├─ ship-gate          :8812 ─ GitHub
+  ├─ ticket-gate        :8821 ─ Linear writes + product code
+  ├─ linear (catalog connector) ─ ticket reads
+  ├─ 7 git-backed skills, Daytona sandbox, dynamic subagents, OpenUI cards
+  └─ native approval on every destructive tool, by exact name
+```
 
 ## Run it from a clean clone
 
 **Prerequisites:**
-- Python 3.12+
-- Node.js 22.14+
-- An AWS account (credentials in the standard boto3 chain, e.g. `~/.aws/credentials`)
-- A Daytona API key with sandbox and snapshot permissions
-- An OpenAI (or other) model key
+- Python 3.12+ and Node.js 22.14+
+- AWS credentials in the standard boto3 chain (e.g. `~/.aws/credentials`)
+- In TrueForge Settings: a model provider, a Daytona key (sandbox + snapshot permissions), and the catalog **Linear** connector
+- For the non-AWS jobs: a Postgres (migration), a GitHub repo + PAT (release), a Linear API key (tickets). See `.env.example`.
 
 ```bash
 git clone https://github.com/Nikhil7174/trueForge.git && cd trueForge
-python3.12 -m venv .venv && .venv/bin/pip install -e '.[aws]'
-cp .env.example .env        # set TRUEFORGE_MODEL, SKILL_GIT_URL, SKILL_GIT_REF (no secrets needed for AWS if ~/.aws is set)
+python3.12 -m venv .venv && .venv/bin/pip install -e '.[aws,migration]'
+cp .env.example .env        # fill in the values; never commit .env
 
 make doctor                 # read-only / dry-run AWS permission probe
-make seed                   # creates the us-west-2 environment (see "Real vs staged"); run early, IAM telemetry lags ~4 h
+make seed                   # the us-west-2 environment for cloudcost / iam-review (see "Real vs staged")
 ```
 
-1. **Start TrueForge.** Allow it to reach the local MCP servers. The allow-list is exact-host, so everything else stays protected.
+1. **Start TrueForge.** Allow it to reach the local MCP servers (an exact-host allow-list; everything else stays protected):
    ```bash
    OUTBOUND_URL_ALLOWED_HOSTS='["127.0.0.1","localhost"]' npx @truefoundry/trueforge   # UI: http://localhost:8790
    ```
-2. **Configure it** at `http://localhost:8790`:
-   - **Settings → Models**: add your provider. `TRUEFORGE_MODEL` must be `<provider>/<model name>`.
-   - **Settings → Sandbox providers**: add Daytona. Set auto-delete low (for example 60 min), because Daytona's free tier caps total sandbox disk at 30 GiB.
-3. **Run the two MCP servers**, one per terminal, and register the agent:
+   In **Settings**: add the model provider (`TRUEFORGE_MODEL=<provider>/<model>`), Daytona (set auto-delete low, e.g. 60 min, because the free tier caps sandbox disk at 30 GiB), and the **Linear** connector.
+2. **Start the gates**, one terminal each. You only need the ones for the labels you use:
    ```bash
-   make mcp-cost   # cost-janitor-aws MCP on :8766
-   make mcp-iam    # access-reviewer-iam MCP on :8765 (IAM_BACKEND=aws)
-   make agent      # registers skills (git-backed from SKILL_GIT_URL@SKILL_GIT_REF), connectors, and the platform-guardian agent
+   make mcp-cost               # :8766  cloudcost
+   make mcp-iam                # :8765  iam-review (IAM_BACKEND=aws)
+   .venv/bin/tf-gate           # :8811  migration
+   .venv/bin/tf-ship           # :8812  release
+   .venv/bin/tf-ticket-gate    # :8821  Bug
    ```
-4. **Open Agents → platform-guardian** and try:
-   - `Clean up unattached EBS volumes and idle IPs in us-west-2.`
-   - `Review least privilege for our CI and analytics roles.`
-5. **Remove everything the seed created** (plus the backups the agent took) with `make teardown`.
+3. **Register the one agent:** `make agent`. This registers the skills (git-backed from `SKILL_GIT_URL@SKILL_GIT_REF`), the connectors and **platform-guardian**. Plain `tf-seed` would register every plugin as its own agent instead.
+4. **Start the single Linear entry point:** `make linear`. It routes by label (`LINEAR_ROUTES`) and only picks up tickets created after it starts.
+5. **File a ticket** in Linear with a routing label, e.g. `cloudcost`: *Clean up unattached EBS volumes and idle IPs in us-west-2*. Within about 20 s the ticket shows `Working`, and a session appears in TrueForge → **Sessions**. Click **Resume Chat** to answer questions and Allow or Deny approvals. The outcome is posted back to the ticket.
+6. **Clean up:** `make teardown` removes everything `make seed` created, plus the backups the agent took.
+
+You can also chat with **Agents → platform-guardian** directly in the UI, without Linear.
 
 **AWS permissions:**
 - Agent, read:
@@ -59,7 +75,7 @@ make seed                   # creates the us-west-2 environment (see "Real vs st
   - `iam:List*`, `iam:Get*`, `iam:GenerateServiceLastAccessedDetails`
 - Agent, write:
   - `ec2:CreateSnapshot`, `ec2:CreateTags`, `ec2:DeleteVolume`, `ec2:ReleaseAddress`, `ec2:DeleteSnapshot`, `ec2:TerminateInstances`
-  - `iam:DetachRolePolicy`, `iam:PutRolePolicy`
+  - `iam:DetachRolePolicy`, `iam:PutRolePolicy` (`iam-review` with `IAM_BACKEND=aws`)
 - The seed additionally creates volumes, an Elastic IP, a stopped `t3.micro` and two IAM roles, and assumes those roles once.
 
 ## How it stops
@@ -84,7 +100,8 @@ make seed                   # creates the us-west-2 environment (see "Real vs st
 | Generative UI (OpenUI, stock components) | fixed card contract: FindingsTable, CostTable, PlanCard, PolicyDiff, BlastRadius, PreApproval, Outcome (`skills/aws-hygiene-ui`) |
 | `ask_user_question` | evidence-first questions, one recommended option with a reason; free text triggers a rewritten re-ask |
 | Dynamic subagents | one evidence-gathering subagent per IAM role, run in parallel |
-| SDK / settings API | `tf-seed` registers skills, connectors and the agent reproducibly |
+| SDK / settings API | `tf-seed` / `make agent` registers skills, connectors and the agent reproducibly; the Linear trigger starts sessions through the SDK |
+| Catalog MCP connector | `linear` (ticket reads for ticket-resolver) |
 
 ## Real vs staged
 
@@ -260,4 +277,4 @@ is unapplied, so passing tests are not enough to ship. That rule lives in the ga
 
 Do not put keys in git. Disclose AI assistants in this README when you submit.
 
-**AI assistants used while building:** Cursor; Claude (Anthropic) for the migration-rehearsal plugin; Claude Code (Anthropic) for the aws-hygiene work (infra, cost-janitor, IAM AWS backend, umbrella, skills).
+**AI assistants used while building:** Cursor; Claude (Anthropic) for the migration-rehearsal plugin; Claude Code (Anthropic) for the platform-guardian work (infra, cost-janitor, IAM AWS backend, umbrella agent, label-routed Linear trigger, skills, docs).
