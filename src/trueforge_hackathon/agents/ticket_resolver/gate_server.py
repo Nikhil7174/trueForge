@@ -9,7 +9,7 @@ MCP tools (streamable HTTP, bearer auth):
   ticket_status      ledger view for one ticket
 
 Config (env or ./.env): LINEAR_API_KEY, LINEAR_TEAM_KEY (ZYN), LINEAR_TRIGGER_LABEL (Bug), TICKET_GATE_TOKEN,
-TICKET_GATE_HOST, TICKET_GATE_PORT (8812), TICKET_REPO_PATH (demo aco-api), TICKET_GATE_STATE_DIR (./.ticket-gate).
+TICKET_GATE_HOST, TICKET_GATE_PORT (8821), TICKET_REPO_PATH (demo aco-api), TICKET_GATE_STATE_DIR (./.ticket-gate).
 Run with `tf-ticket-gate` (or `python -m trueforge_hackathon ticket-gate`).
 """
 from __future__ import annotations
@@ -48,7 +48,7 @@ from trueforge_hackathon.agents.ticket_resolver.linear import Linear, LinearErro
 
 GATE_TOKEN = os.environ.get("TICKET_GATE_TOKEN", "")
 HOST = os.environ.get("TICKET_GATE_HOST", "127.0.0.1")
-PORT = int(os.environ.get("TICKET_GATE_PORT", "8812"))
+PORT = int(os.environ.get("TICKET_GATE_PORT", "8821"))
 STATE_DIR = Path(os.environ.get("TICKET_GATE_STATE_DIR", Path.cwd() / ".ticket-gate"))
 REPO_PATH = Path(os.environ.get("TICKET_REPO_PATH", Path(__file__).resolve().parent / "demo" / "aco-api"))
 PROJECT = os.environ.get("TICKET_PROJECT", REPO_PATH.name)

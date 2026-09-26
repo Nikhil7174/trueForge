@@ -23,7 +23,7 @@ LINEAR_READ_TOOLS = [
 
 def _mcp_url() -> str:
     return os.environ.get("TICKET_GATE_PUBLIC_URL") or (
-        f"http://localhost:{os.environ.get('TICKET_GATE_PORT', '8812')}/mcp"
+        f"http://localhost:{os.environ.get('TICKET_GATE_PORT', '8821')}/mcp"
     )
 
 
