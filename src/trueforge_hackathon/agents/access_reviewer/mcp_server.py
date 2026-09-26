@@ -34,6 +34,28 @@ def _dump(payload: Any) -> str:
     return json.dumps(payload, default=lambda o: getattr(o, "__dict__", str(o)), indent=2)
 
 
+from trueforge_hackathon.agents.access_reviewer.backends import backend_name as iam_backend, get_backend  # noqa: E402
+
+READ = ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=False)
+
+
+def _live() -> bool:
+    """IAM_BACKEND=aws: the CloudTrail/lint backend (backends/aws.py). Otherwise the store/Access Advisor path below."""
+    return iam_backend() == "aws"
+
+
+def _call(method: str, *args: Any, **kwargs: Any) -> str:
+    backend = get_backend()
+    fn = getattr(backend, method, None)
+    if fn is None:
+        return _dump({"error": f"{method} requires IAM_BACKEND=aws (current backend: {backend.name})"})
+    try:
+        return _dump(fn(*args, **kwargs))
+    except Exception as exc:  # noqa: BLE001  surface AWS errors to the agent as data
+        code = exc.response.get("Error", {}).get("Code") if hasattr(exc, "response") else None
+        return _dump({"error": f"{type(exc).__name__}: {exc}", "aws_error_code": code})
+
+
 @mcp.custom_route("/health", methods=["GET"])
 async def health(_request: Request) -> JSONResponse:
     payload: dict[str, Any] = {
@@ -60,6 +82,8 @@ async def health(_request: Request) -> JSONResponse:
     ),
 )
 def list_principals_tool() -> str:
+    if _live():
+        return _call("list_principals")
     account: Any = "fixture"
     if use_aws():
         from trueforge_hackathon.agents.access_reviewer.aws_iam import account_id
@@ -87,6 +111,8 @@ def list_principals_tool() -> str:
     ),
 )
 def get_principal_policies(principal: str) -> str:
+    if _live():
+        return _call("get_principal_policies", principal)
     found = get_principal(principal)
     if found is None:
         return _dump({"error": f"Unknown principal: {principal}"})
@@ -124,6 +150,8 @@ def get_principal_policies(principal: str) -> str:
     ),
 )
 def get_access_last_used(principal: str | None = None) -> str:
+    if _live():
+        return _call("get_access_last_used", principal)
     window = unused_after_days()
     if principal:
         targets = [get_principal(principal)]
@@ -179,6 +207,8 @@ def get_access_last_used(principal: str | None = None) -> str:
     ),
 )
 def revoke_access_tool(principal: str, policy: str) -> str:
+    if _live():
+        return _call("revoke_access", principal, policy)
     result = revoke_access(principal, policy)
     if not result.get("ok"):
         return _dump({"error": result.get("error")})
@@ -198,6 +228,89 @@ def revoke_access_tool(principal: str, policy: str) -> str:
             "remainingPolicies": [item.name for item in found.policies],
         }
     )
+
+
+# ------------------------------------------------------------------ evidence (live AWS backend)
+
+
+@mcp.tool(
+    name="get_role_policies",
+    description="Full policy documents for one role: attached managed policies (default version), inline policies "
+    "and the trust policy. Read-only.",
+    annotations=READ,
+)
+def get_role_policies(role: str) -> str:
+    return _call("get_role_policies", role)
+
+
+@mcp.tool(
+    name="get_service_last_accessed",
+    description="IAM service-last-accessed report for one role (generate, poll, get; action-level where AWS tracks it). "
+    "Can lag up to ~4 hours. Read-only.",
+    annotations=READ,
+)
+def get_service_last_accessed(role: str) -> str:
+    return _call("get_service_last_accessed", role)
+
+
+@mcp.tool(
+    name="get_role_cloudtrail_activity",
+    description="CloudTrail evidence for one role: AssumeRole sessions in the lookback window and the API calls each "
+    "session made (by access key). Lags minutes; 90-day maximum. Read-only.",
+    annotations=READ,
+)
+def get_role_cloudtrail_activity(role: str, lookback_hours: int = 168) -> str:
+    return _call("get_role_cloudtrail_activity", role, lookback_hours)
+
+
+# ------------------------------------------------------------------ destructive (approval-gated by name)
+
+
+@mcp.tool(
+    name="detach_role_policy",
+    description="DESTRUCTIVE. Detach one managed policy from a role. Every argument is shown to the approver. "
+    "Refused for deny-listed and service-linked roles; already-detached returns already_absent.",
+    annotations=ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_hint=True, open_world_hint=False),
+)
+def detach_role_policy(
+    role: str,
+    policy_arn: str,
+    services_lost: list[str],
+    actions_lost_count: int,
+    blast_radius: str,
+    rollback: str,
+    reason: str,
+) -> str:
+    result = json.loads(_call("detach_role_policy", role, policy_arn))
+    result["declared"] = {
+        "services_lost": services_lost,
+        "actions_lost_count": actions_lost_count,
+        "blast_radius": blast_radius,
+        "rollback": rollback,
+        "reason": reason,
+    }
+    return _dump(result)
+
+
+@mcp.tool(
+    name="put_role_policy",
+    description="DESTRUCTIVE. Create or replace an inline least-privilege policy on a role. The server lints it "
+    "(no wildcard actions, no IAM on '*', no new privilege-escalation actions, no access beyond the current "
+    "policies, conditions preserved) and refuses on any violation.",
+    annotations=ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_hint=True, open_world_hint=False),
+)
+def put_role_policy(
+    role: str,
+    policy_name: str,
+    policy_json: str,
+    replaces: list[str],
+    diff_summary: str,
+    rollback: str,
+    reason: str,
+) -> str:
+    result = json.loads(_call("put_role_policy", role, policy_name, policy_json))
+    result["declared"] = {"replaces": replaces, "diff_summary": diff_summary, "rollback": rollback, "reason": reason}
+    return _dump(result)
 
 
 def main() -> None:
